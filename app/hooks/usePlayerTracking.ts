@@ -22,7 +22,7 @@ export interface TrackedPerson {
   height: number;
 }
 
-const TRACKING_INTERVAL_MS = 140;
+const TRACKING_INTERVAL_MS = 100;
 
 function toTrackedPerson(pose: Pose): TrackedPerson | null {
   if (typeof pose.id !== "number" || !pose.box) return null;
@@ -88,15 +88,13 @@ export function usePlayerTracking(
           enableSmoothing: true,
           enableTracking: true,
           trackerType: trackerTypes.TrackerType.BoundingBox,
-          minPoseScore: 0.2,
-          // Preserve enough detail for players standing beyond the table while
-          // keeping inference comfortably interactive on current phones.
-          multiPoseMaxDimension: 384,
+          minPoseScore: 0.25,
+          multiPoseMaxDimension: 256,
           trackerConfig: {
             maxTracks: 2,
             // Keep IDs alive while React replaces the video element between setup screens.
             maxAge: 10_000,
-            minSimilarity: 0.1,
+            minSimilarity: 0.15,
           },
         };
 

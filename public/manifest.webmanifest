@@ -5,7 +5,7 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "landscape-primary",
+  "orientation": "any",
   "background_color": "#07110d",
   "theme_color": "#07110d",
   "categories": ["sports", "utilities"],
