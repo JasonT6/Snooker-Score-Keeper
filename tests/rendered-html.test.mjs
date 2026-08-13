@@ -99,10 +99,16 @@ test("keeps consented player memory across temporary pose-track loss", async () 
   assert.match(playerRecognition, /MATCH_THRESHOLD/);
   assert.match(playerRecognition, /MATCH_MARGIN/);
   assert.match(playerRecognition, /CONFIRMATION_COUNT = 2/);
+  assert.match(playerRecognition, /HANDOFF_WINDOW_MS = 5_000/);
+  assert.match(playerRecognition, /handoffTrackAssignments/);
+  assert.match(playerRecognition, /minSize: 32/);
   assert.match(playerRecognition, /bindTrack\(playerIndex as 0 \| 1, track\.trackId\)/);
   assert.match(playerRecognition, /thumbnail: faceThumbnail/);
   assert.doesNotMatch(playerRecognition, /localStorage|indexedDB/);
   assert.match(setup, /Currently linked to track/);
+  assert.match(setup, /Matching saved faces/);
+  assert.match(setup, /Identifying track/);
+  assert.match(playerTracking, /maxAge: 10_000/);
   assert.match(packageJson, /@tensorflow-models\/pose-detection/);
   assert.match(packageJson, /@vladmandic\/human/);
   assert.match(brief, /automatically re-identify and rebind players after track loss/);

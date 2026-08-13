@@ -698,7 +698,15 @@ export function SetupApp() {
                 {cameraStatus === "streaming" && (
                   <div className="tracker-strip" aria-live="polite">
                     <span className="tracker-strip-label">
-                      {playerTrackingStatus === "loading" ? "Starting tracker" : "Player tracking"}
+                      {playerTrackingStatus === "loading"
+                        ? "Starting tracker"
+                        : playerRecognitionStatus === "loading"
+                          ? "Loading player memory"
+                          : trackedPeople.some(
+                                (person) => !playerTrackIds.includes(person.trackId),
+                              )
+                            ? "Matching saved faces"
+                            : "Players recognized"}
                     </span>
                     {trackedPeople.map((person) => {
                       const playerIndex = playerTrackIds.findIndex(
@@ -709,7 +717,7 @@ export function SetupApp() {
                           <span className="tracking-dot" aria-hidden="true" />
                           {playerIndex >= 0
                             ? draft.players[playerIndex].name.trim()
-                            : `Unassigned track ${person.trackId}`}
+                            : `Identifying track ${person.trackId}…`}
                         </span>
                       );
                     })}
@@ -752,7 +760,7 @@ export function SetupApp() {
                     <span className="check-mark" aria-hidden="true">
                       {profilesAreReady ? "✓" : "5"}
                     </span>
-                    Both players remembered · {visiblePlayerCount}/2 currently visible
+                    Both players remembered · {visiblePlayerCount}/2 currently recognized
                   </li>
                 </ul>
 
@@ -763,6 +771,9 @@ export function SetupApp() {
                 )}
                 {playerTrackingError && (
                   <p className="camera-error" role="alert">{playerTrackingError}</p>
+                )}
+                {playerRecognitionError && (
+                  <p className="camera-error" role="alert">{playerRecognitionError}</p>
                 )}
 
                 {cameraDevices.length > 1 && (

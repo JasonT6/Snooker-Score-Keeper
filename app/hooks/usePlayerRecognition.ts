@@ -15,11 +15,57 @@ export interface PlayerFaceMemory {
 
 type PlayerMemories = [PlayerFaceMemory | null, PlayerFaceMemory | null];
 type PlayerTrackIds = [number | null, number | null];
+type PlayerAnchors = [TrackedPerson | null, TrackedPerson | null];
 
 const RECOGNITION_INTERVAL_MS = 750;
 const MATCH_THRESHOLD = 0.55;
 const MATCH_MARGIN = 0.08;
 const CONFIRMATION_COUNT = 2;
+const HANDOFF_WINDOW_MS = 5_000;
+const HANDOFF_MAX_DISTANCE = 1.5;
+
+function trackDistance(previous: TrackedPerson, current: TrackedPerson) {
+  const width = Math.max(previous.width, current.width, 1);
+  const height = Math.max(previous.height, current.height, 1);
+  const positionDistance =
+    Math.abs(previous.centerX - current.centerX) / width +
+    Math.abs(previous.centerY - current.centerY) / height;
+  const sizeDistance =
+    Math.abs(Math.log(Math.max(current.width, 1) / Math.max(previous.width, 1))) +
+    Math.abs(Math.log(Math.max(current.height, 1) / Math.max(previous.height, 1)));
+  return positionDistance + sizeDistance * 0.25;
+}
+
+export function handoffTrackAssignments(
+  anchors: PlayerAnchors,
+  people: TrackedPerson[],
+  assignments: PlayerTrackIds,
+) {
+  const next: PlayerTrackIds = [...assignments];
+  const visibleTrackIds = new Set(people.map((person) => person.trackId));
+  const usedTrackIds = new Set(
+    next.filter((trackId): trackId is number =>
+      typeof trackId === "number" && visibleTrackIds.has(trackId),
+    ),
+  );
+
+  for (const playerIndex of [0, 1] as const) {
+    if (typeof next[playerIndex] === "number" && visibleTrackIds.has(next[playerIndex] as number)) {
+      continue;
+    }
+    const anchor = anchors[playerIndex];
+    if (!anchor) continue;
+    const candidate = people
+      .filter((person) => !usedTrackIds.has(person.trackId))
+      .map((person) => ({ person, distance: trackDistance(anchor, person) }))
+      .sort((left, right) => left.distance - right.distance)[0];
+    if (!candidate || candidate.distance > HANDOFF_MAX_DISTANCE) continue;
+    next[playerIndex] = candidate.person.trackId;
+    usedTrackIds.add(candidate.person.trackId);
+  }
+
+  return next;
+}
 
 function faceThumbnail(video: HTMLVideoElement, face: FaceResult) {
   const [faceX, faceY, faceWidth, faceHeight] = face.box;
@@ -81,6 +127,10 @@ export function usePlayerRecognition(
   const humanRef = useRef<Human | null>(null);
   const peopleRef = useRef(people);
   const memoriesRef = useRef<PlayerMemories>([null, null]);
+  const assignmentsRef = useRef<PlayerTrackIds>([null, null]);
+  const identityAnchorsRef = useRef<PlayerAnchors>([null, null]);
+  const lastVideoElementRef = useRef<HTMLVideoElement | null>(null);
+  const handoffUntilRef = useRef(0);
   const processingRef = useRef(false);
   const votesRef = useRef(new Map<string, number>());
   const loadGenerationRef = useRef(0);
@@ -91,15 +141,51 @@ export function usePlayerRecognition(
 
   useEffect(() => {
     peopleRef.current = people;
+    const currentAssignments = assignmentsRef.current;
+    for (const playerIndex of [0, 1] as const) {
+      const assignedPerson = people.find(
+        (person) => person.trackId === currentAssignments[playerIndex],
+      );
+      if (assignedPerson) identityAnchorsRef.current[playerIndex] = assignedPerson;
+    }
+
+    if (Date.now() <= handoffUntilRef.current) {
+      const handedOff = handoffTrackAssignments(
+        identityAnchorsRef.current,
+        people,
+        currentAssignments,
+      );
+      if (
+        handedOff[0] !== currentAssignments[0] ||
+        handedOff[1] !== currentAssignments[1]
+      ) {
+        assignmentsRef.current = handedOff;
+        setPlayerTrackIds(handedOff);
+      }
+    }
   }, [people]);
 
+  useEffect(() => {
+    if (!videoElement) {
+      if (lastVideoElementRef.current) handoffUntilRef.current = Date.now() + HANDOFF_WINDOW_MS;
+      return;
+    }
+    if (lastVideoElementRef.current && lastVideoElementRef.current !== videoElement) {
+      handoffUntilRef.current = Date.now() + HANDOFF_WINDOW_MS;
+    }
+    lastVideoElementRef.current = videoElement;
+  }, [videoElement]);
+
   const bindTrack = useCallback((playerIndex: 0 | 1, trackId: number) => {
+    const currentPerson = peopleRef.current.find((person) => person.trackId === trackId);
+    if (currentPerson) identityAnchorsRef.current[playerIndex] = currentPerson;
     setPlayerTrackIds((current) => {
       if (current[playerIndex] === trackId) return current;
       const next: PlayerTrackIds = [...current];
       const otherPlayer = playerIndex === 0 ? 1 : 0;
       if (next[otherPlayer] === trackId) next[otherPlayer] = null;
       next[playerIndex] = trackId;
+      assignmentsRef.current = next;
       return next;
     });
   }, []);
@@ -129,7 +215,7 @@ export function usePlayerRecognition(
               enabled: true,
               maxDetected: 2,
               minConfidence: 0.5,
-              minSize: 64,
+              minSize: 32,
               skipFrames: 0,
               skipTime: 0,
             },
@@ -241,12 +327,15 @@ export function usePlayerRecognition(
     setPlayerTrackIds((current) => {
       const next: PlayerTrackIds = [...current];
       next[playerIndex] = null;
+      assignmentsRef.current = next;
       return next;
     });
     votesRef.current.clear();
   }, []);
 
   const resetAssignments = useCallback(() => {
+    assignmentsRef.current = [null, null];
+    identityAnchorsRef.current = [null, null];
     setPlayerTrackIds([null, null]);
     votesRef.current.clear();
   }, []);

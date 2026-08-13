@@ -92,7 +92,8 @@ export function usePlayerTracking(
           multiPoseMaxDimension: 256,
           trackerConfig: {
             maxTracks: 2,
-            maxAge: 1000,
+            // Keep IDs alive while React replaces the video element between setup screens.
+            maxAge: 10_000,
             minSimilarity: 0.15,
           },
         };
