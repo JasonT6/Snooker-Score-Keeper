@@ -1073,8 +1073,12 @@ h2 {
   white-space: nowrap;
 }
 
-.tracker-binding[data-ready="true"] {
+.tracker-binding[data-saved="true"] {
   color: var(--green);
+}
+
+.tracker-binding[data-saved="true"][data-ready="false"] {
+  color: var(--lime);
 }
 
 .profile-count {
@@ -1083,10 +1087,15 @@ h2 {
   min-height: 22px;
   place-items: center;
   border-radius: 999px;
-  background: rgba(112, 226, 160, 0.08);
-  color: var(--green);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--faint);
   font-size: 10px;
   font-weight: 780;
+}
+
+.profile-count[data-saved="true"] {
+  background: rgba(112, 226, 160, 0.08);
+  color: var(--green);
 }
 
 .registration-panel {

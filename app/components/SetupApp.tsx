@@ -7,7 +7,11 @@ import {
   usePlayerTracking,
   type TrackedPerson,
 } from "../hooks/usePlayerTracking";
-import { usePlayerRecognition } from "../hooks/usePlayerRecognition";
+import {
+  PLAYER_FACE_DESCRIPTOR_MINIMUM,
+  usePlayerRecognition,
+  type PlayerFaceMemory,
+} from "../hooks/usePlayerRecognition";
 import { ServiceWorkerRegistration } from "./ServiceWorkerRegistration";
 
 const SETUP_STORAGE_KEY = "cuesight.setup.v1";
@@ -83,11 +87,17 @@ function closestPersonToFrameCentre(
   })[0] ?? null;
 }
 
+function hasSavedFaceMemory(memory: PlayerFaceMemory | null) {
+  return (memory?.descriptors.length ?? 0) >= PLAYER_FACE_DESCRIPTOR_MINIMUM;
+}
+
 export function SetupApp() {
   const [step, setStep] = useState(0);
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [draft, setDraft] = useState<SetupDraft>(DEFAULT_DRAFT);
   const [activeProfilePlayer, setActiveProfilePlayer] = useState<0 | 1>(0);
+  const [capturingProfilePlayer, setCapturingProfilePlayer] =
+    useState<0 | 1 | null>(null);
   const [profileMessage, setProfileMessage] = useState("");
   const [online, setOnline] = useState(true);
   const orientation = useDeviceOrientation();
@@ -142,7 +152,9 @@ export function SetupApp() {
   );
 
   const recognitionConsentReady = draft.players.every((player) => player.faceConsent);
-  const profilesAreReady = playerMemories.every(Boolean);
+  const profilesAreReady = playerMemories.every(hasSavedFaceMemory);
+  const activePlayerMemory = playerMemories[activeProfilePlayer];
+  const activePlayerMemoryIsSaved = hasSavedFaceMemory(activePlayerMemory);
   const visiblePlayerCount = playerTrackIds.filter((trackId) =>
     trackedPeople.some((person) => person.trackId === trackId),
   ).length;
@@ -173,20 +185,27 @@ export function SetupApp() {
   };
 
   const capturePlayerProfile = async () => {
+    const playerIndex = activeProfilePlayer;
     try {
       if (playerTrackingStatus !== "tracking" || !centredTrackedPerson) {
         throw new Error("Wait until the player tracker finds the person in the guide.");
       }
 
-      await enrollPlayer(activeProfilePlayer, centredTrackedPerson);
+      setCapturingProfilePlayer(playerIndex);
       setProfileMessage(
-        `${draft.players[activeProfilePlayer].name.trim()} is remembered and linked to track ` +
+        `Capturing ${PLAYER_FACE_DESCRIPTOR_MINIMUM} face samples for ${draft.players[playerIndex].name.trim()}…`,
+      );
+      const memory = await enrollPlayer(playerIndex, centredTrackedPerson);
+      setProfileMessage(
+        `${draft.players[playerIndex].name.trim()}'s ${memory.descriptors.length} face samples are saved and linked to track ` +
           `${centredTrackedPerson.trackId}. They can leave and be recognized when they return.`,
       );
     } catch (error) {
       setProfileMessage(
         error instanceof Error ? error.message : "The profile could not be captured.",
       );
+    } finally {
+      setCapturingProfilePlayer(null);
     }
   };
 
@@ -485,31 +504,34 @@ export function SetupApp() {
                   <p className="eyebrow">Step 3 · Player memory</p>
                   <h2 id="profile-title">Let the camera remember you.</h2>
                   <p>
-                    Select a player and capture one clear face. The trained descriptor can
-                    reconnect that player to a new body track later.
+                    Select a player and hold still while five clear face samples are captured.
+                    Those descriptors can reconnect that player to a new body track later.
                   </p>
                 </div>
 
                 <div className="profile-roster" role="tablist" aria-label="Player to register">
                   {draft.players.map((player, index) => {
                     const playerIndex = index as 0 | 1;
+                    const memory = playerMemories[playerIndex];
+                    const memoryIsSaved = hasSavedFaceMemory(memory);
                     return (
                       <button
                         className="profile-person-card"
                         data-active={activeProfilePlayer === playerIndex}
                         type="button"
                         role="tab"
+                        disabled={capturingProfilePlayer !== null}
                         aria-selected={activeProfilePlayer === playerIndex}
                         onClick={() => selectProfileCapture(playerIndex)}
                         key={player.name || index}
                       >
                         <div className="profile-person-heading">
                           <span className="player-index">
-                            {playerMemories[playerIndex]?.thumbnail ? (
+                            {memory?.thumbnail ? (
                               <span
                                 className="face-memory-thumbnail"
                                 style={{
-                                  backgroundImage: `url(${playerMemories[playerIndex]?.thumbnail})`,
+                                  backgroundImage: `url(${memory.thumbnail})`,
                                 }}
                                 aria-hidden="true"
                               />
@@ -518,18 +540,21 @@ export function SetupApp() {
                             )}
                             {player.name.trim()}
                           </span>
-                          <span className="profile-count">
-                            {playerMemories[playerIndex] ? "Remembered" : "Not captured"}
+                          <span className="profile-count" data-saved={memoryIsSaved}>
+                            {memoryIsSaved
+                              ? `Saved · ${memory?.descriptors.length} samples`
+                              : "Not saved"}
                           </span>
                         </div>
                         <span
                           className="tracker-binding"
+                          data-saved={memoryIsSaved}
                           data-ready={typeof playerTrackIds[playerIndex] === "number"}
                         >
                           {typeof playerTrackIds[playerIndex] === "number"
-                            ? `Currently linked to track ${playerTrackIds[playerIndex]}`
-                            : playerMemories[playerIndex]
-                              ? "Ready to recognize on return"
+                            ? `Saved profile · linked to track ${playerTrackIds[playerIndex]}`
+                            : memoryIsSaved
+                              ? "Saved profile · not currently linked"
                               : "Face memory required"}
                         </span>
                       </button>
@@ -545,16 +570,16 @@ export function SetupApp() {
                         <small>
                           {playerRecognitionStatus === "loading"
                             ? "Loading recognition model"
-                            : playerMemories[activeProfilePlayer]
-                              ? "Ready · capture again anytime"
-                              : "Required for player recall"}
+                            : activePlayerMemoryIsSaved
+                              ? `Saved · ${activePlayerMemory?.descriptors.length} descriptors`
+                              : `Required · ${PLAYER_FACE_DESCRIPTOR_MINIMUM} samples`}
                         </small>
                       </span>
                       <span
                         className="capture-state"
-                        data-ready={Boolean(playerMemories[activeProfilePlayer])}
+                        data-ready={activePlayerMemoryIsSaved}
                       >
-                        {playerMemories[activeProfilePlayer] ? "✓" : "Add"}
+                        {activePlayerMemoryIsSaved ? "✓" : "Add"}
                       </span>
                     </div>
                   </div>
@@ -590,14 +615,16 @@ export function SetupApp() {
                         playerTrackingStatus !== "tracking" ||
                         !centredTrackedPerson ||
                         playerRecognitionStatus !== "ready" ||
+                        capturingProfilePlayer !== null ||
                         !draft.players[activeProfilePlayer].faceConsent
                       }
                       onClick={() => void capturePlayerProfile()}
                     >
-                      {playerMemories[activeProfilePlayer] ? "Retake" : "Capture"}{" "}
-                      {draft.players[activeProfilePlayer].name.trim()}&apos;s face
+                      {capturingProfilePlayer === activeProfilePlayer
+                        ? `Capturing ${PLAYER_FACE_DESCRIPTOR_MINIMUM} samples…`
+                        : `${activePlayerMemoryIsSaved ? "Retake" : "Capture"} ${draft.players[activeProfilePlayer].name.trim()}'s face`}
                     </button>
-                    {playerMemories[activeProfilePlayer] && (
+                    {activePlayerMemoryIsSaved && (
                       <button
                         className="text-button"
                         type="button"

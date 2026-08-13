@@ -21,7 +21,7 @@ Open the URL printed by the development server. Camera access works on `localhos
 2. Open it in current iOS Safari or Android Chrome.
 3. Accept the on-device processing notice, add both player names, and obtain local face-matching consent from each player.
 4. Open the rear camera and wait for the MoveNet tracker and face-memory model to become ready. Model files are served by the app; camera frames remain on the device.
-5. Have only the selected player stand in the guide and capture their face, then repeat for the other player.
+5. Have only the selected player stand in the guide and hold still while five face descriptors are captured, then repeat for the other player.
 6. Confirm both players show as remembered. Move either player out of view and back in; after their face is visible, the tracker should reconnect their name even if MoveNet issued a new track ID.
 7. Rotate the phone between portrait and landscape. The orientation status and layout should update without restarting the stream.
 8. Confirm that stopping or completing setup turns off the camera indicator.
@@ -39,12 +39,12 @@ npm test
 - `app/components/SetupApp.tsx` owns the first-run flow and device-local setup draft.
 - `app/hooks/useCamera.ts` isolates camera permission, rear-camera preference, stream cleanup, and camera switching.
 - `app/hooks/usePlayerTracking.ts` loads MoveNet MultiPose Lightning through TensorFlow.js, limits it to two tracks, and exposes stable pose IDs during a continuous camera session.
-- `app/hooks/usePlayerRecognition.ts` loads the Human face-description model, detects enrollment and returning faces directly in the full camera frame, associates each visible face with its overlapping MoveNet body track, holds each player’s descriptor gallery and thumbnail in React memory, and explicitly binds a returning player’s new MoveNet ID back to their stable identity. A tracked-head crop remains as a fallback for small faces in the wide table view.
+- `app/hooks/usePlayerRecognition.ts` loads the Human face-description model, saves five enrollment descriptors per player, detects every returning face directly in the full camera frame, compares each face descriptor with both player galleries, associates a match with its overlapping MoveNet body track, and explicitly binds that new MoveNet ID back to the stable player identity. A tracked-head crop remains as a zoomed face-search fallback for small faces in the wide table view; Human still detects and isolates a face inside that crop before producing an embedding.
 - `app/hooks/useDeviceOrientation.ts` isolates modern and legacy orientation events.
 - `app/lib/orientation.ts` contains deterministic orientation helpers.
 - `public/manifest.webmanifest` and `public/sw.js` provide installable, offline-aware PWA behavior.
 
-Camera streams, face descriptors, and face thumbnails are never persisted or uploaded. MoveNet and Human inference run in the browser through WebGL. Only player names, face-consent choices, and match length are stored in localStorage after setup; the two face memories disappear when the page closes. MoveNet pose IDs are temporary and cannot be forced to reuse an expired number. The app instead maintains a stable Player 1/Player 2 identity layer. After a player is absent for ten seconds the stale mapping is released. A returning face can be recognized near or far in the full frame and linked to its overlapping new body track; if the face is too close for MoveNet to produce a body track, the match is held for eight seconds and attached once exactly one new unassigned track appears. Two matching observations are still required before assignment. Clothing is deliberately not used as identity because it is not a reliable person descriptor.
+Camera streams, face descriptors, and face thumbnails are never persisted or uploaded. MoveNet and Human inference run in the browser through WebGL. Only player names, face-consent choices, and match length are stored in localStorage after setup; the two face memories disappear when the page closes. MoveNet pose IDs are temporary and cannot be forced to reuse an expired number. The app instead maintains a stable Player 1/Player 2 identity layer. After a player is absent for ten seconds the stale mapping is released. Every detected returning face is compared with the saved galleries and can be linked only to the overlapping unassigned body track. There is no position-only handoff and no automatic assignment merely because one person or one unassigned track is visible. Two descriptor-backed observations are required before assignment. Clothing is deliberately not used as identity because it is not a reliable person descriptor.
 
 ## Scope boundary
 
