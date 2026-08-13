@@ -1,10 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  createVisualProfile,
-  type VisualProfileKind,
-} from "../lib/visualProfile";
 
 export type CameraStatus =
   | "idle"
@@ -51,7 +47,6 @@ export function useCamera() {
   const [errorMessage, setErrorMessage] = useState("");
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const videoElementRef = useRef<HTMLVideoElement | null>(null);
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -61,7 +56,6 @@ export function useCamera() {
   }, []);
 
   const attachVideo = useCallback((element: HTMLVideoElement | null) => {
-    videoElementRef.current = element;
     setVideoElement(element);
     if (!element || !streamRef.current) return;
 
@@ -129,13 +123,6 @@ export function useCamera() {
     }
   }, []);
 
-  const captureVisualProfile = useCallback((kind: VisualProfileKind) => {
-    if (!videoElementRef.current || status !== "streaming") {
-      throw new Error("Open the camera before capturing a player profile.");
-    }
-    return createVisualProfile(videoElementRef.current, kind);
-  }, [status]);
-
   useEffect(() => stopCamera, [stopCamera]);
 
   return {
@@ -148,6 +135,5 @@ export function useCamera() {
     videoRef: attachVideo,
     startCamera,
     stopCamera,
-    captureVisualProfile,
   };
 }

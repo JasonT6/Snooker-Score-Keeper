@@ -974,13 +974,6 @@ h2 {
   border-radius: 46% 46% 42% 42%;
 }
 
-.profile-guide-clothing {
-  top: 65%;
-  width: min(56%, 330px);
-  height: 52%;
-  border-radius: 44% 44% 18px 18px;
-}
-
 .profile-guide-label {
   position: absolute;
   bottom: -36px;
@@ -1057,6 +1050,16 @@ h2 {
   white-space: nowrap;
 }
 
+.face-memory-thumbnail {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(199, 242, 120, 0.4);
+  border-radius: 50%;
+  background-position: center;
+  background-size: cover;
+}
+
 .tracker-binding {
   display: block;
   margin-left: 23px;
@@ -1095,7 +1098,7 @@ h2 {
 
 .capture-type-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -1156,26 +1159,6 @@ h2 {
   place-items: center;
   border-radius: 50%;
   background: rgba(112, 226, 160, 0.11);
-}
-
-.profile-swatches {
-  display: flex;
-  flex: 0 0 auto;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: #07100c;
-}
-
-.profile-swatch {
-  width: 18px;
-  height: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 50%;
-}
-
-.profile-swatch + .profile-swatch {
-  margin-left: -4px;
 }
 
 .profile-capture-actions {

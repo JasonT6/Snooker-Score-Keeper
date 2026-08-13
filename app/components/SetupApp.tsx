@@ -7,7 +7,7 @@ import {
   usePlayerTracking,
   type TrackedPerson,
 } from "../hooks/usePlayerTracking";
-import type { VisualProfile, VisualProfileKind } from "../lib/visualProfile";
+import { usePlayerRecognition } from "../hooks/usePlayerRecognition";
 import { ServiceWorkerRegistration } from "./ServiceWorkerRegistration";
 
 const SETUP_STORAGE_KEY = "cuesight.setup.v1";
@@ -16,8 +16,6 @@ const SETUP_STEPS = ["Privacy", "Players", "Profiles", "Camera", "Match"] as con
 interface PlayerDraft {
   name: string;
   faceConsent: boolean;
-  faceProfile: VisualProfile | null;
-  clothingProfile: VisualProfile | null;
 }
 
 interface SetupDraft {
@@ -27,8 +25,8 @@ interface SetupDraft {
 
 const DEFAULT_DRAFT: SetupDraft = {
   players: [
-    { name: "", faceConsent: false, faceProfile: null, clothingProfile: null },
-    { name: "", faceConsent: false, faceProfile: null, clothingProfile: null },
+    { name: "", faceConsent: false },
+    { name: "", faceConsent: false },
   ],
   bestOf: 3,
 };
@@ -55,18 +53,10 @@ function safeLoadDraft(): SetupDraft {
         {
           name: String(parsed.players[0]?.name ?? ""),
           faceConsent: Boolean(parsed.players[0]?.faceConsent),
-          faceProfile: parsed.players[0]?.faceConsent
-            ? readProfile(parsed.players[0]?.faceProfile, "face")
-            : null,
-          clothingProfile: readProfile(parsed.players[0]?.clothingProfile, "clothing"),
         },
         {
           name: String(parsed.players[1]?.name ?? ""),
           faceConsent: Boolean(parsed.players[1]?.faceConsent),
-          faceProfile: parsed.players[1]?.faceConsent
-            ? readProfile(parsed.players[1]?.faceProfile, "face")
-            : null,
-          clothingProfile: readProfile(parsed.players[1]?.clothingProfile, "clothing"),
         },
       ],
       bestOf: [1, 3, 5, 7, 9].includes(Number(parsed.bestOf))
@@ -76,23 +66,6 @@ function safeLoadDraft(): SetupDraft {
   } catch {
     return DEFAULT_DRAFT;
   }
-}
-
-function readProfile(value: unknown, kind: VisualProfileKind): VisualProfile | null {
-  if (!value || typeof value !== "object") return null;
-  const profile = value as Partial<VisualProfile>;
-  if (
-    profile.version !== 1 ||
-    profile.kind !== kind ||
-    typeof profile.capturedAt !== "number" ||
-    !Array.isArray(profile.embedding) ||
-    !profile.embedding.every((item) => typeof item === "number") ||
-    !Array.isArray(profile.swatches) ||
-    !profile.swatches.every((item) => typeof item === "string")
-  ) {
-    return null;
-  }
-  return profile as VisualProfile;
 }
 
 function closestPersonToFrameCentre(
@@ -115,11 +88,7 @@ export function SetupApp() {
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [draft, setDraft] = useState<SetupDraft>(DEFAULT_DRAFT);
   const [activeProfilePlayer, setActiveProfilePlayer] = useState<0 | 1>(0);
-  const [profileKind, setProfileKind] = useState<VisualProfileKind>("clothing");
   const [profileMessage, setProfileMessage] = useState("");
-  const [playerTrackIds, setPlayerTrackIds] = useState<
-    [number | null, number | null]
-  >([null, null]);
   const [online, setOnline] = useState(true);
   const orientation = useDeviceOrientation();
   const {
@@ -132,7 +101,6 @@ export function SetupApp() {
     videoRef,
     startCamera,
     stopCamera,
-    captureVisualProfile,
   } = useCamera();
   const cameraVerified = cameraStatus === "streaming";
   const trackingEnabled = cameraVerified && step >= 2 && step <= 4;
@@ -142,6 +110,15 @@ export function SetupApp() {
     errorMessage: playerTrackingError,
     resetTracker,
   } = usePlayerTracking(videoElement, trackingEnabled);
+  const {
+    status: playerRecognitionStatus,
+    errorMessage: playerRecognitionError,
+    memories: playerMemories,
+    playerTrackIds,
+    enrollPlayer,
+    forgetPlayer,
+    resetAssignments,
+  } = usePlayerRecognition(videoElement, trackedPeople, trackingEnabled);
 
   useEffect(() => {
     const syncConnection = () => setOnline(navigator.onLine);
@@ -163,18 +140,11 @@ export function SetupApp() {
     [draft.players],
   );
 
-  const profilesAreReady = useMemo(
-    () =>
-      draft.players.every(
-        (player) =>
-          Boolean(player.clothingProfile) &&
-          (!player.faceConsent || Boolean(player.faceProfile)),
-      ),
-    [draft.players],
-  );
-  const playerTracksAreLinked = playerTrackIds.every(
-    (trackId) => typeof trackId === "number",
-  );
+  const recognitionConsentReady = draft.players.every((player) => player.faceConsent);
+  const profilesAreReady = playerMemories.every(Boolean);
+  const visiblePlayerCount = playerTrackIds.filter((trackId) =>
+    trackedPeople.some((person) => person.trackId === trackId),
+  ).length;
   const centredTrackedPerson = useMemo(
     () => closestPersonToFrameCentre(trackedPeople, videoElement),
     [trackedPeople, videoElement],
@@ -192,61 +162,25 @@ export function SetupApp() {
   };
 
   const setFaceConsent = (index: 0 | 1, faceConsent: boolean) => {
-    updatePlayer(index, {
-      faceConsent,
-      ...(faceConsent ? {} : { faceProfile: null }),
-    });
-    if (!faceConsent && index === activeProfilePlayer && profileKind === "face") {
-      setProfileKind("clothing");
-    }
+    updatePlayer(index, { faceConsent });
+    if (!faceConsent) forgetPlayer(index);
   };
 
-  const selectProfileCapture = (index: 0 | 1, kind: VisualProfileKind) => {
+  const selectProfileCapture = (index: 0 | 1) => {
     setActiveProfilePlayer(index);
-    setProfileKind(kind);
     setProfileMessage("");
   };
 
-  const capturePlayerProfile = () => {
+  const capturePlayerProfile = async () => {
     try {
       if (playerTrackingStatus !== "tracking" || !centredTrackedPerson) {
         throw new Error("Wait until the player tracker finds the person in the guide.");
       }
 
-      const otherPlayer = activeProfilePlayer === 0 ? 1 : 0;
-      if (playerTrackIds[otherPlayer] === centredTrackedPerson.trackId) {
-        throw new Error(
-          `That person is already linked to ${draft.players[otherPlayer].name.trim()}. ` +
-            `Have ${draft.players[activeProfilePlayer].name.trim()} stand alone in the guide.`,
-        );
-      }
-
-      if (
-        profileKind === "face" &&
-        playerTrackIds[activeProfilePlayer] !== centredTrackedPerson.trackId
-      ) {
-        throw new Error(
-          `Capture ${draft.players[activeProfilePlayer].name.trim()}'s clothing profile first ` +
-            "to link their tracking ID.",
-        );
-      }
-
-      const profile = captureVisualProfile(profileKind);
-      updatePlayer(activeProfilePlayer, {
-        [profileKind === "face" ? "faceProfile" : "clothingProfile"]: profile,
-      });
-      if (profileKind === "clothing") {
-        setPlayerTrackIds((current) => {
-          const next: [number | null, number | null] = [...current];
-          next[activeProfilePlayer] = centredTrackedPerson.trackId;
-          return next;
-        });
-      }
+      await enrollPlayer(activeProfilePlayer, centredTrackedPerson.trackId);
       setProfileMessage(
-        `${draft.players[activeProfilePlayer].name.trim()}'s ${profileKind} profile is ready` +
-          (profileKind === "clothing"
-            ? ` and linked to track ${centredTrackedPerson.trackId}.`
-            : "."),
+        `${draft.players[activeProfilePlayer].name.trim()} is remembered and linked to track ` +
+          `${centredTrackedPerson.trackId}. They can leave and be recognized when they return.`,
       );
     } catch (error) {
       setProfileMessage(
@@ -256,14 +190,14 @@ export function SetupApp() {
   };
 
   const stopCameraAndTracking = () => {
-    setPlayerTrackIds([null, null]);
+    resetAssignments();
     resetTracker();
     stopCamera();
   };
 
   const startCameraAndResetTracking = (deviceId?: string) => {
     if (cameraVerified) {
-      setPlayerTrackIds([null, null]);
+      resetAssignments();
       resetTracker();
     }
     return startCamera(deviceId);
@@ -360,9 +294,9 @@ export function SetupApp() {
                     <summary>How camera data is handled</summary>
                     <p>
                       The live preview is displayed directly from your browser. Closing
-                      the preview stops its camera tracks. Optional face enrollment requires
-                      a separate choice from each player. Only compact descriptors are
-                      saved; raw profile photos and video are discarded.
+                      the preview stops its camera tracks. Face matching requires a separate
+                      choice from each player. The descriptor and preview thumbnail remain
+                      in page memory only and are deleted when the page closes.
                     </p>
                   </details>
 
@@ -395,14 +329,14 @@ export function SetupApp() {
               className="screen-content"
               onSubmit={(event: FormEvent) => {
                 event.preventDefault();
-                if (namesAreValid) setStep(2);
+                if (namesAreValid && recognitionConsentReady) setStep(2);
               }}
             >
               <p className="eyebrow">Step 2 · Player profiles</p>
               <h2 id="players-title">Who&apos;s at the table?</h2>
               <p className="lede">
-                Add the names that should appear on the live scoreboard. Face matching is
-                optional and must be approved separately by each player.
+                Add the scoreboard names. Each player must approve local face matching so
+                the app can remember them after they leave and return to the frame.
               </p>
 
               <div className="players-grid">
@@ -413,7 +347,7 @@ export function SetupApp() {
                         <span className="player-ball" aria-hidden="true" />
                         Player {index + 1}
                       </div>
-                      <span className="optional-label">Local profile</span>
+                      <span className="optional-label">Session only</span>
                     </div>
                     <label className="field-label" htmlFor={`player-${index}`}>
                       Display name
@@ -442,8 +376,8 @@ export function SetupApp() {
                       <label className="toggle-copy" htmlFor={`face-consent-${index}`}>
                         <strong>Allow local face matching</strong>
                         <span>
-                          Adds a guided face capture in the next step. Clothing-based
-                          matching is set up for every player and does not require this.
+                          Creates a face descriptor on this phone. It is removed when this
+                          page is closed and is never uploaded.
                         </span>
                       </label>
                     </div>
@@ -454,8 +388,8 @@ export function SetupApp() {
               <div className="privacy-note">
                 <span className="note-icon" aria-hidden="true">i</span>
                 <span>
-                  Consent can be changed later. Face enrollment is skipped unless the
-                  player opts in, and nothing is sent off-device.
+                  Clothing is not used for identity. Both players must opt in for this
+                  automatic re-identification mode; either player can remove their memory.
                 </span>
               </div>
 
@@ -463,8 +397,12 @@ export function SetupApp() {
                 <button className="text-button" type="button" onClick={() => setStep(0)}>
                   Back
                 </button>
-                <button className="primary-button" type="submit" disabled={!namesAreValid}>
-                  Create profiles <span className="arrow">→</span>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={!namesAreValid || !recognitionConsentReady}
+                >
+                  Register players <span className="arrow">→</span>
                 </button>
               </div>
             </form>
@@ -524,14 +462,12 @@ export function SetupApp() {
 
                 {cameraStatus === "streaming" && (
                   <div
-                    className={`profile-guide profile-guide-${profileKind}`}
-                    data-profile-guide={profileKind}
+                    className="profile-guide profile-guide-face"
+                    data-profile-guide="face"
                     aria-hidden="true"
                   >
                     <span className="profile-guide-label">
-                      {profileKind === "face"
-                        ? "Centre your face and look toward the camera"
-                        : "Stand naturally with your shirt and upper body visible"}
+                      Centre your face, look toward the camera, and keep the other player out
                     </span>
                   </div>
                 )}
@@ -545,11 +481,11 @@ export function SetupApp() {
 
               <div className="profile-controls">
                 <div className="profile-intro">
-                  <p className="eyebrow">Step 3 · Visual identity</p>
-                  <h2 id="profile-title">Register each player.</h2>
+                  <p className="eyebrow">Step 3 · Player memory</p>
+                  <h2 id="profile-title">Let the camera remember you.</h2>
                   <p>
-                    Select a player and profile type, then capture. Keep only that player
-                    in the guide.
+                    Select a player and capture one clear face. The trained descriptor can
+                    reconnect that player to a new body track later.
                   </p>
                 </div>
 
@@ -563,25 +499,26 @@ export function SetupApp() {
                         type="button"
                         role="tab"
                         aria-selected={activeProfilePlayer === playerIndex}
-                        onClick={() =>
-                          selectProfileCapture(
-                            playerIndex,
-                            profileKind === "face" && !player.faceConsent
-                              ? "clothing"
-                              : profileKind,
-                          )
-                        }
+                        onClick={() => selectProfileCapture(playerIndex)}
                         key={player.name || index}
                       >
                         <div className="profile-person-heading">
                           <span className="player-index">
-                            <span className="player-ball" aria-hidden="true" />
+                            {playerMemories[playerIndex]?.thumbnail ? (
+                              <span
+                                className="face-memory-thumbnail"
+                                style={{
+                                  backgroundImage: `url(${playerMemories[playerIndex]?.thumbnail})`,
+                                }}
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <span className="player-ball" aria-hidden="true" />
+                            )}
                             {player.name.trim()}
                           </span>
                           <span className="profile-count">
-                            {Number(Boolean(player.clothingProfile)) +
-                              Number(Boolean(player.faceProfile))}
-                            /{player.faceConsent ? 2 : 1}
+                            {playerMemories[playerIndex] ? "Remembered" : "Not captured"}
                           </span>
                         </div>
                         <span
@@ -589,8 +526,10 @@ export function SetupApp() {
                           data-ready={typeof playerTrackIds[playerIndex] === "number"}
                         >
                           {typeof playerTrackIds[playerIndex] === "number"
-                            ? `Track ${playerTrackIds[playerIndex]} linked`
-                            : "Tracking not linked"}
+                            ? `Currently linked to track ${playerTrackIds[playerIndex]}`
+                            : playerMemories[playerIndex]
+                              ? "Ready to recognize on return"
+                              : "Face memory required"}
                         </span>
                       </button>
                     );
@@ -598,62 +537,25 @@ export function SetupApp() {
                 </div>
 
                 <div className="registration-panel">
-                  <div className="capture-type-row" aria-label="Profile type">
-                    <button
-                      className="capture-choice"
-                      data-selected={profileKind === "clothing"}
-                      type="button"
-                      onClick={() => selectProfileCapture(activeProfilePlayer, "clothing")}
-                    >
+                  <div className="capture-type-row" aria-label="Face memory status">
+                    <div className="capture-choice" data-selected="true">
                       <span>
-                        <strong>Clothing</strong>
+                        <strong>Face memory</strong>
                         <small>
-                          {draft.players[activeProfilePlayer].clothingProfile
-                            ? "Ready · retake"
-                            : "Required"}
-                        </small>
-                      </span>
-                      {draft.players[activeProfilePlayer].clothingProfile ? (
-                        <span className="profile-swatches" aria-label="Captured clothing colours">
-                          {draft.players[activeProfilePlayer].clothingProfile.swatches.map(
-                            (colour, swatchIndex) => (
-                              <span
-                                className="profile-swatch"
-                                style={{ backgroundColor: colour }}
-                                key={`${colour}-${swatchIndex}`}
-                              />
-                            ),
-                          )}
-                        </span>
-                      ) : (
-                        <span className="capture-state">Add</span>
-                      )}
-                    </button>
-
-                    <button
-                      className="capture-choice"
-                      data-selected={profileKind === "face"}
-                      type="button"
-                      disabled={!draft.players[activeProfilePlayer].faceConsent}
-                      onClick={() => selectProfileCapture(activeProfilePlayer, "face")}
-                    >
-                      <span>
-                        <strong>Face</strong>
-                        <small>
-                          {!draft.players[activeProfilePlayer].faceConsent
-                            ? "Not enabled"
-                            : draft.players[activeProfilePlayer].faceProfile
-                              ? "Ready · retake"
-                              : "Required"}
+                          {playerRecognitionStatus === "loading"
+                            ? "Loading recognition model"
+                            : playerMemories[activeProfilePlayer]
+                              ? "Ready · capture again anytime"
+                              : "Required for player recall"}
                         </small>
                       </span>
                       <span
                         className="capture-state"
-                        data-ready={Boolean(draft.players[activeProfilePlayer].faceProfile)}
+                        data-ready={Boolean(playerMemories[activeProfilePlayer])}
                       >
-                        {draft.players[activeProfilePlayer].faceProfile ? "✓" : "Add"}
+                        {playerMemories[activeProfilePlayer] ? "✓" : "Add"}
                       </span>
-                    </button>
+                    </div>
                   </div>
 
                   {cameraError && (
@@ -666,13 +568,16 @@ export function SetupApp() {
                         className="inline-retry"
                         type="button"
                         onClick={() => {
-                          setPlayerTrackIds([null, null]);
+                          resetAssignments();
                           resetTracker();
                         }}
                       >
                         Retry player tracker
                       </button>
                     </div>
+                  )}
+                  {playerRecognitionError && (
+                    <p className="camera-error" role="alert">{playerRecognitionError}</p>
                   )}
 
                   <div className="profile-capture-actions">
@@ -683,25 +588,24 @@ export function SetupApp() {
                         cameraStatus !== "streaming" ||
                         playerTrackingStatus !== "tracking" ||
                         !centredTrackedPerson ||
-                        (profileKind === "face" &&
-                          (!draft.players[activeProfilePlayer].faceConsent ||
-                            typeof playerTrackIds[activeProfilePlayer] !== "number"))
+                        playerRecognitionStatus !== "ready" ||
+                        !draft.players[activeProfilePlayer].faceConsent
                       }
-                      onClick={capturePlayerProfile}
+                      onClick={() => void capturePlayerProfile()}
                     >
-                      Capture {draft.players[activeProfilePlayer].name.trim()}&apos;s {profileKind}
+                      {playerMemories[activeProfilePlayer] ? "Retake" : "Capture"}{" "}
+                      {draft.players[activeProfilePlayer].name.trim()}&apos;s face
                     </button>
-                    {draft.players[activeProfilePlayer].faceProfile && profileKind === "face" && (
+                    {playerMemories[activeProfilePlayer] && (
                       <button
                         className="text-button"
                         type="button"
                         onClick={() => {
-                          setFaceConsent(activeProfilePlayer, false);
-                          setProfileKind("clothing");
-                          setProfileMessage("Face data removed from this setup.");
+                          forgetPlayer(activeProfilePlayer);
+                          setProfileMessage("That player’s session face memory was removed.");
                         }}
                       >
-                        Remove face data
+                        Forget this player
                       </button>
                     )}
                   </div>
@@ -721,7 +625,7 @@ export function SetupApp() {
                   <button
                     className="primary-button"
                     type="button"
-                    disabled={!profilesAreReady || !playerTracksAreLinked}
+                    disabled={!profilesAreReady}
                     onClick={() => setStep(3)}
                   >
                     Frame the table <span className="arrow">→</span>
@@ -729,7 +633,8 @@ export function SetupApp() {
                 </div>
 
                 <p className="descriptor-note">
-                  Raw frames are discarded; only compact local descriptors are kept.
+                  Face descriptors and thumbnails live only in this page&apos;s memory. They
+                  are never saved to localStorage and disappear when the page closes.
                 </p>
               </div>
             </div>
@@ -843,11 +748,11 @@ export function SetupApp() {
                     </span>
                     MoveNet two-person tracker ready
                   </li>
-                  <li className="check-item" data-ready={playerTracksAreLinked}>
+                  <li className="check-item" data-ready={profilesAreReady}>
                     <span className="check-mark" aria-hidden="true">
-                      {playerTracksAreLinked ? "✓" : "5"}
+                      {profilesAreReady ? "✓" : "5"}
                     </span>
-                    {playerTrackIds.filter((trackId) => typeof trackId === "number").length}/2 player IDs linked
+                    Both players remembered · {visiblePlayerCount}/2 currently visible
                   </li>
                 </ul>
 
@@ -901,7 +806,7 @@ export function SetupApp() {
                     disabled={
                       cameraStatus !== "streaming" ||
                       playerTrackingStatus !== "tracking" ||
-                      !playerTracksAreLinked
+                      !profilesAreReady
                     }
                     onClick={() => setStep(4)}
                   >
@@ -961,15 +866,11 @@ export function SetupApp() {
                     </div>
                     <div className="summary-row">
                       <dt>Face matching</dt>
-                      <dd>{draft.players.filter((player) => player.faceConsent).length} opted in</dd>
+                      <dd>{profilesAreReady ? "2 session memories ready" : "Registration incomplete"}</dd>
                     </div>
                     <div className="summary-row">
-                      <dt>Clothing profiles</dt>
-                      <dd>{draft.players.filter((player) => player.clothingProfile).length} ready</dd>
-                    </div>
-                    <div className="summary-row">
-                      <dt>Player tracking</dt>
-                      <dd>{playerTracksAreLinked ? "Player 1 and Player 2 linked" : "Not linked"}</dd>
+                      <dt>Live identity</dt>
+                      <dd>{visiblePlayerCount}/2 recognized in the current view</dd>
                     </div>
                   </dl>
 

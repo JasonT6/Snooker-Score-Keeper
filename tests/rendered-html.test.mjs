@@ -72,36 +72,48 @@ test("keeps camera and orientation concerns isolated", async () => {
   assert.match(orientationLogic, /width > height \? "landscape" : "portrait"/);
 });
 
-test("includes consent-gated face and required clothing enrollment in milestone 1", async () => {
-  const [setup, camera, playerTracking, visualProfile, brief, readme, packageJson] = await Promise.all([
+test("keeps consented player memory across temporary pose-track loss", async () => {
+  const [setup, camera, playerTracking, playerRecognition, brief, readme, packageJson] = await Promise.all([
     readFile(new URL("app/components/SetupApp.tsx", projectRoot), "utf8"),
     readFile(new URL("app/hooks/useCamera.ts", projectRoot), "utf8"),
     readFile(new URL("app/hooks/usePlayerTracking.ts", projectRoot), "utf8"),
-    readFile(new URL("app/lib/visualProfile.ts", projectRoot), "utf8"),
+    readFile(new URL("app/hooks/usePlayerRecognition.ts", projectRoot), "utf8"),
     readFile(new URL("automatic_snooker_scoring_web_app.md", projectRoot), "utf8"),
     readFile(new URL("README.md", projectRoot), "utf8"),
     readFile(new URL("package.json", projectRoot), "utf8"),
   ]);
 
   assert.match(setup, /"Privacy", "Players", "Profiles", "Camera", "Match"/);
-  assert.match(setup, /Boolean\(player\.clothingProfile\)/);
-  assert.match(setup, /!player\.faceConsent \|\| Boolean\(player\.faceProfile\)/);
-  assert.match(setup, /Remove face data/);
-  assert.match(setup, /Raw frames are discarded/);
+  assert.match(setup, /recognitionConsentReady/);
+  assert.match(setup, /playerMemories\.every\(Boolean\)/);
+  assert.match(setup, /Forget this player/);
+  assert.match(setup, /never saved to localStorage/);
   assert.match(setup, /className="profile-nav"/);
   assert.match(setup, /className="capture-type-row"/);
-  assert.match(camera, /captureVisualProfile/);
-  assert.match(visualProfile, /context\.drawImage\(/);
-  assert.match(visualProfile, /kind === "clothing" \? sampleSwatches/);
+  assert.doesNotMatch(camera, /captureVisualProfile/);
   assert.match(playerTracking, /MULTIPOSE_LIGHTNING/);
   assert.match(playerTracking, /enableTracking: true/);
   assert.match(playerTracking, /maxTracks: 2/);
   assert.match(playerTracking, /maxPoses: 2/);
-  assert.match(setup, /playerTracksAreLinked/);
-  assert.match(setup, /Track.*linked/);
+  assert.match(playerRecognition, /@vladmandic\/human/);
+  assert.match(playerRecognition, /MATCH_THRESHOLD/);
+  assert.match(playerRecognition, /MATCH_MARGIN/);
+  assert.match(playerRecognition, /CONFIRMATION_COUNT = 2/);
+  assert.match(playerRecognition, /bindTrack\(playerIndex as 0 \| 1, track\.trackId\)/);
+  assert.match(playerRecognition, /thumbnail: faceThumbnail/);
+  assert.doesNotMatch(playerRecognition, /localStorage|indexedDB/);
+  assert.match(setup, /Currently linked to track/);
   assert.match(packageJson, /@tensorflow-models\/pose-detection/);
-  assert.match(brief, /guided face enrollment for players who opt in/);
+  assert.match(packageJson, /@vladmandic\/human/);
+  assert.match(brief, /automatically re-identify and rebind players after track loss/);
   assert.match(brief, /MoveNet MultiPose tracker/);
-  assert.match(readme, /guided face\/clothing enrollment/);
+  assert.match(readme, /face-based re-identification after track loss/);
+  assert.match(readme, /Clothing is deliberately not used as identity/);
   assert.doesNotMatch(setup, /Face capture arrives in a later milestone/);
+
+  await Promise.all([
+    access(new URL("public/models/human/blazeface.json", projectRoot)),
+    access(new URL("public/models/human/facemesh.json", projectRoot)),
+    access(new URL("public/models/human/faceres.json", projectRoot)),
+  ]);
 });

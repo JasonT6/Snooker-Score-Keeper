@@ -14,9 +14,10 @@ This is a vision-assisted referee and scorer. Design it so that the system is ho
 2. The app opens the camera and guides the user through setup.
 3. During setup, the app sees both players and creates a profile for each:
    - Obtain explicit consent before processing face data.
-   - Capture a face embedding locally only if consent is given.
-   - Also learn a visual appearance profile from clothing, body shape, and colours, so face matching is not required during play.
-   - Run MoveNet MultiPose Lightning locally with tracking enabled. While each player stands alone in the capture guide, bind the model's persistent pose tracking ID to Player 1 or Player 2 for the continuous camera session.
+   - Capture a trained face descriptor locally only after consent is given. Keep the descriptor and optional preview thumbnail in page memory only; do not write either to localStorage, IndexedDB, or a backend, and discard them when the page closes.
+   - Do not use clothing colours as identity. Clothing changes and similar outfits make colour samples too weak to serve as player memory.
+   - Run MoveNet MultiPose Lightning locally with tracking enabled. While each player stands alone in the capture guide, bind the current pose tracking ID to Player 1 or Player 2, but treat that ID as temporary.
+   - Re-identify a returning player from the face descriptor and rebind any new MoveNet pose ID after the player leaves the frame, is occluded long enough to lose the track, or the tracker restarts. Require a confident match and do not guess when the face is not visible.
    - Let the user enter or confirm each player's name.
 4. The user places the phone on a tripod beside or beyond the table and points its camera toward the table from an oblique angle. The setup screen guides them to frame the entire table, all six pockets, and a useful amount of space around the table where players stand; it must not assume an overhead or top-down physical camera position.
 5. Automatically detect the table boundary, pockets, rails, balls, camera orientation, and table perspective. Rectify the camera view into a normalized top-down table coordinate system.
@@ -69,11 +70,11 @@ Use a hybrid on-device / server-capable architecture. Start with browser APIs an
 ### Player attribution
 
 - Use `@tensorflow-models/pose-detection` with MoveNet MultiPose Lightning, WebGL acceleration, tracking enabled, and a maximum of two active tracks. Preserve the returned pose IDs while the camera stream remains continuous.
-- During clothing enrollment, associate the person centred in the guide with the selected player. Reject an enrollment if the same live pose ID is already linked to the other player.
+- Use `@vladmandic/human` face descriptors for on-device player re-identification. During enrollment, associate the person centred in the guide with the selected player and reject a capture with zero or multiple faces.
 - Detect people around the table and establish the active player from proximity, pose, cue alignment, and shot timing.
-- Match each person to the two setup profiles using clothing/body appearance, with face matching only where the user consented.
-- Treat MoveNet pose IDs as session-scoped tracking identifiers, not permanent identities. If an ID is lost after a long occlusion, camera restart, or a player leaving the frame, rebind it using the enrolled appearance profile before attributing a shot.
-- Do not send biometric data off-device by default. Provide clear retention and deletion controls.
+- Match visible faces against the two consented, session-only face descriptors. Require a minimum similarity, a clear margin over the other player, and repeated confirmation before changing an existing identity binding.
+- Treat MoveNet pose IDs as short-lived tracking identifiers, not permanent identities. If an ID is lost after a long occlusion, camera restart, screen transition, or a player leaving the frame, preserve the player memory and rebind the newly issued track after face recognition succeeds.
+- Do not send biometric data off-device or persist it. Provide an immediate per-player forget control, and discard all face descriptors and thumbnails automatically when the page closes.
 - If the active player cannot be determined confidently, mark the shot as attribution-uncertain in the audit data rather than confidently assigning the wrong player.
 
 ## UI and experience
@@ -83,7 +84,7 @@ Create a polished, high-contrast mobile interface usable in a billiards room.
 ### Main screens
 
 - Welcome / privacy and camera-permission screen.
-- New-match setup: player names, face-consent choice, clothing-profile capture, table framing, calibration, match format.
+- New-match setup: player names, face-consent choice, session-only face-memory capture, table framing, calibration, match format.
 - Live scorer: both names and scores, current break, active player, ball-on, phase of frame, camera-health indicator, concise detection status, and pause/end controls.
 - Event history: chronological shots, points/fouls, reason, confidence, and replay thumbnail/video when available.
 - Match summary: frames, highest breaks, corrections, and exportable match record.
@@ -111,18 +112,18 @@ Persist a match as an append-only event log plus derived state. Include a correc
 
 Build in phases, keeping the app runnable after each phase:
 
-1. Mobile PWA shell, camera preview, orientation handling, setup UI, explicit per-player face consent, guided face enrollment for players who opt in, and required clothing/appearance enrollment for both players. Derive and retain compact profiles locally without persisting the raw capture frames. Run an on-device MoveNet MultiPose tracker, bind its two session-scoped pose IDs to Player 1 and Player 2 during enrollment, and show tracker health and assignments during table framing.
+1. Mobile PWA shell, camera preview, orientation handling, setup UI, explicit per-player face consent, and guided face-memory enrollment for both players. Derive trained face descriptors on-device, retain descriptors and preview thumbnails in page memory only, and discard them when the page closes. Run an on-device MoveNet MultiPose tracker, bind its temporary pose IDs during enrollment, automatically re-identify and rebind players after track loss or a screen transition, and show tracker health and current assignments during table framing. Clothing-based identity is deliberately excluded.
 2. Table/pocket calibration from the angled tripod footage and a perspective-rectified, normalized top-down overlay.
 3. Ball detection/tracking with a simulated or recorded-video adapter for deterministic development.
 4. Complete rules engine with exhaustive unit tests for regular scoring, fouls, free balls, clearance, and re-spotted black.
 5. Shot event extraction and automatic score updates from detected events.
-6. Active-player inference using the Milestone 1 pose tracks and profiles, appearance-based re-identification after track loss, ongoing profile/consent management, privacy controls, and event history.
+6. Active-player inference using the Milestone 1 pose tracks and persistent-in-session player identities, ongoing consent management, privacy controls, and event history.
 7. Reliability work: confidence thresholds, movement/lost-calibration detection, recovery paths, replay/audit data, accessibility, and field testing.
 
 ## Testing and acceptance criteria
 
 - Test on current iOS Safari and Android Chrome where supported camera APIs permit.
-- Test portrait and landscape mounting, varied camera positions, normal room lighting, shadows, colourful clothing, and momentary occlusions.
+- Test portrait and landscape mounting, varied camera positions, normal room lighting, face angles, players leaving and returning to frame, and momentary occlusions.
 - Unit-test the rules engine with table-driven cases for every rule above.
 - Use recorded clips and synthetic event sequences to regression-test detection and scoring.
 - The app must never silently invent a score when evidence is below the confidence threshold. It may enter a clearly visible tracking-paused state while retaining the uncommitted observations for review.
