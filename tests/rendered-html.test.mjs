@@ -107,11 +107,10 @@ test("keeps consented player memory across temporary pose-track loss", async () 
   assert.match(playerRecognition, /ENROLLMENT_SAMPLE_COUNT = 2/);
   assert.match(playerRecognition, /MAX_DESCRIPTOR_GALLERY_SIZE = 5/);
   assert.match(playerRecognition, /LOST_TRACK_RELEASE_MS = 10_000/);
-  assert.match(playerRecognition, /PENDING_FACE_MATCH_MS = 8_000/);
   assert.match(playerRecognition, /matchDescriptorToPlayer/);
   assert.match(playerRecognition, /human\.detect\(videoElement\)/);
   assert.match(playerRecognition, /trackForFace/);
-  assert.match(playerRecognition, /pendingFaceMatchesRef/);
+  assert.doesNotMatch(playerRecognition, /pendingFaceMatchesRef|PENDING_FACE_MATCH_MS/);
   assert.match(playerRecognition, /bindTrack\(candidate\.playerIndex, candidate\.trackId\)/);
   assert.match(playerRecognition, /faceThumbnail\(videoElement, selectedFace\)/);
   assert.doesNotMatch(playerRecognition, /localStorage|indexedDB/);
@@ -120,7 +119,7 @@ test("keeps consented player memory across temporary pose-track loss", async () 
   assert.match(setup, /Identifying track/);
   assert.match(setup, /Re-identifying/);
   assert.match(setup, /Face seen—look straight at camera/);
-  assert.match(setup, /Face matched—waiting for body track/);
+  assert.doesNotMatch(setup, /Face matched—waiting for body track/);
   assert.match(playerTracking, /maxAge: 10_000/);
   assert.match(packageJson, /@tensorflow-models\/pose-detection/);
   assert.match(packageJson, /@vladmandic\/human/);

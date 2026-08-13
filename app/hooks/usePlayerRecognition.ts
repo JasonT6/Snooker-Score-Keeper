@@ -10,7 +10,6 @@ export type ReidentificationStatus =
   | "idle"
   | "waiting-for-face"
   | "comparing"
-  | "face-matched"
   | "no-match"
   | "confirming"
   | "matched";
@@ -35,7 +34,6 @@ const ENROLLMENT_SAMPLE_COUNT = 2;
 const MAX_DESCRIPTOR_GALLERY_SIZE = 5;
 const FACE_CROP_SIZE = 320;
 const LOST_TRACK_RELEASE_MS = 10_000;
-const PENDING_FACE_MATCH_MS = 8_000;
 
 function faceThumbnail(video: HTMLVideoElement, face: FaceResult) {
   const [faceX, faceY, faceWidth, faceHeight] = face.box;
@@ -233,7 +231,6 @@ export function usePlayerRecognition(
   const processingRef = useRef(false);
   const votesRef = useRef(new Map<string, number>());
   const missingSinceRef = useRef<[number | null, number | null]>([null, null]);
-  const pendingFaceMatchesRef = useRef<[number, number]>([0, 0]);
   const loadGenerationRef = useRef(0);
   const [status, setStatus] = useState<PlayerRecognitionStatus>("idle");
   const [errorMessage, setErrorMessage] = useState("");
@@ -460,14 +457,12 @@ export function usePlayerRecognition(
       assignmentsRef.current = next;
       return next;
     });
-    pendingFaceMatchesRef.current[playerIndex] = 0;
     votesRef.current.clear();
   }, []);
 
   const resetAssignments = useCallback(() => {
     assignmentsRef.current = [null, null];
     identityAnchorsRef.current = [null, null];
-    pendingFaceMatchesRef.current = [0, 0];
     setPlayerTrackIds([null, null]);
     votesRef.current.clear();
   }, []);
@@ -536,19 +531,15 @@ export function usePlayerRecognition(
           const descriptor = [...face.embedding];
           const match = matchDescriptorToPlayer(human, descriptor, memoriesRef.current);
           if (!match.matched) continue;
-          matchedFaceFound = true;
           const track = trackForFace(face, tracksToIdentify);
           if (track) {
+            matchedFaceFound = true;
             candidates.push({
               descriptor,
               playerIndex: match.playerIndex,
               similarity: match.similarity,
               trackId: track.trackId,
             });
-          } else {
-            pendingFaceMatchesRef.current[match.playerIndex] =
-              Date.now() + PENDING_FACE_MATCH_MS;
-            setReidentificationStatus("face-matched");
           }
         }
 
@@ -573,22 +564,6 @@ export function usePlayerRecognition(
             playerIndex: match.playerIndex,
             similarity: match.similarity,
             trackId: track.trackId,
-          });
-        }
-
-        const candidateTrackIds = new Set(candidates.map((candidate) => candidate.trackId));
-        const unmatchedTracks = tracksToIdentify.filter(
-          (track) => !candidateTrackIds.has(track.trackId),
-        );
-        const pendingPlayers = ([0, 1] as const).filter(
-          (playerIndex) => pendingFaceMatchesRef.current[playerIndex] >= Date.now(),
-        );
-        if (unmatchedTracks.length === 1 && pendingPlayers.length === 1) {
-          candidates.push({
-            descriptor: [],
-            playerIndex: pendingPlayers[0],
-            similarity: 1,
-            trackId: unmatchedTracks[0].trackId,
           });
         }
 
@@ -621,7 +596,6 @@ export function usePlayerRecognition(
             ) {
               memory.descriptors.push(candidate.descriptor);
             }
-            pendingFaceMatchesRef.current[candidate.playerIndex] = 0;
           }
         }
 

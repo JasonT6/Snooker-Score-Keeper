@@ -888,8 +888,6 @@ export function SetupApp() {
                             ? `Look toward camera · ${visiblePlayerCount}/2 matched`
                             : reidentificationStatus === "comparing"
                               ? `Comparing saved faces · ${visiblePlayerCount}/2 matched`
-                              : reidentificationStatus === "face-matched"
-                                ? `Face matched—waiting for body track · ${visiblePlayerCount}/2 matched`
                               : reidentificationStatus === "no-match"
                                 ? `Face seen—look straight at camera · ${visiblePlayerCount}/2 matched`
                               : reidentificationStatus === "confirming"
