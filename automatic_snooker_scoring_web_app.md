@@ -107,12 +107,12 @@ Persist a match as an append-only event log plus derived state. Include a correc
 
 Build in phases, keeping the app runnable after each phase:
 
-1. Mobile PWA shell, camera preview, orientation handling, and setup UI.
+1. Mobile PWA shell, camera preview, orientation handling, setup UI, explicit per-player face consent, guided face enrollment for players who opt in, and required clothing/appearance enrollment for both players. Derive and retain compact profiles locally without persisting the raw capture frames.
 2. Table/pocket calibration from the angled tripod footage and a perspective-rectified, normalized top-down overlay.
 3. Ball detection/tracking with a simulated or recorded-video adapter for deterministic development.
 4. Complete rules engine with exhaustive unit tests for regular scoring, fouls, free balls, clearance, and re-spotted black.
 5. Shot event extraction and automatic score updates from detected events.
-6. Player setup, active-player inference, privacy controls, and event history.
+6. Active-player inference using the Milestone 1 profiles, ongoing profile/consent management, privacy controls, and event history.
 7. Reliability work: confidence thresholds, movement/lost-calibration detection, recovery paths, replay/audit data, accessibility, and field testing.
 
 ## Testing and acceptance criteria

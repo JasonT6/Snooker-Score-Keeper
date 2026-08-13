@@ -1,6 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createVisualProfile,
+  type VisualProfileKind,
+} from "../lib/visualProfile";
 
 export type CameraStatus =
   | "idle"
@@ -123,6 +127,13 @@ export function useCamera() {
     }
   }, []);
 
+  const captureVisualProfile = useCallback((kind: VisualProfileKind) => {
+    if (!videoElementRef.current || status !== "streaming") {
+      throw new Error("Open the camera before capturing a player profile.");
+    }
+    return createVisualProfile(videoElementRef.current, kind);
+  }, [status]);
+
   useEffect(() => stopCamera, [stopCamera]);
 
   return {
@@ -134,5 +145,6 @@ export function useCamera() {
     videoRef: attachVideo,
     startCamera,
     stopCamera,
+    captureVisualProfile,
   };
 }

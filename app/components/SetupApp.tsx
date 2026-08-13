@@ -3,14 +3,17 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useCamera, type CameraStatus } from "../hooks/useCamera";
 import { useDeviceOrientation } from "../hooks/useDeviceOrientation";
+import type { VisualProfile, VisualProfileKind } from "../lib/visualProfile";
 import { ServiceWorkerRegistration } from "./ServiceWorkerRegistration";
 
 const SETUP_STORAGE_KEY = "cuesight.setup.v1";
-const SETUP_STEPS = ["Privacy", "Players", "Camera", "Match"] as const;
+const SETUP_STEPS = ["Privacy", "Players", "Profiles", "Camera", "Match"] as const;
 
 interface PlayerDraft {
   name: string;
   faceConsent: boolean;
+  faceProfile: VisualProfile | null;
+  clothingProfile: VisualProfile | null;
 }
 
 interface SetupDraft {
@@ -20,8 +23,8 @@ interface SetupDraft {
 
 const DEFAULT_DRAFT: SetupDraft = {
   players: [
-    { name: "", faceConsent: false },
-    { name: "", faceConsent: false },
+    { name: "", faceConsent: false, faceProfile: null, clothingProfile: null },
+    { name: "", faceConsent: false, faceProfile: null, clothingProfile: null },
   ],
   bestOf: 3,
 };
@@ -48,10 +51,18 @@ function safeLoadDraft(): SetupDraft {
         {
           name: String(parsed.players[0]?.name ?? ""),
           faceConsent: Boolean(parsed.players[0]?.faceConsent),
+          faceProfile: parsed.players[0]?.faceConsent
+            ? readProfile(parsed.players[0]?.faceProfile, "face")
+            : null,
+          clothingProfile: readProfile(parsed.players[0]?.clothingProfile, "clothing"),
         },
         {
           name: String(parsed.players[1]?.name ?? ""),
           faceConsent: Boolean(parsed.players[1]?.faceConsent),
+          faceProfile: parsed.players[1]?.faceConsent
+            ? readProfile(parsed.players[1]?.faceProfile, "face")
+            : null,
+          clothingProfile: readProfile(parsed.players[1]?.clothingProfile, "clothing"),
         },
       ],
       bestOf: [1, 3, 5, 7, 9].includes(Number(parsed.bestOf))
@@ -63,10 +74,30 @@ function safeLoadDraft(): SetupDraft {
   }
 }
 
+function readProfile(value: unknown, kind: VisualProfileKind): VisualProfile | null {
+  if (!value || typeof value !== "object") return null;
+  const profile = value as Partial<VisualProfile>;
+  if (
+    profile.version !== 1 ||
+    profile.kind !== kind ||
+    typeof profile.capturedAt !== "number" ||
+    !Array.isArray(profile.embedding) ||
+    !profile.embedding.every((item) => typeof item === "number") ||
+    !Array.isArray(profile.swatches) ||
+    !profile.swatches.every((item) => typeof item === "string")
+  ) {
+    return null;
+  }
+  return profile as VisualProfile;
+}
+
 export function SetupApp() {
   const [step, setStep] = useState(0);
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [draft, setDraft] = useState<SetupDraft>(DEFAULT_DRAFT);
+  const [activeProfilePlayer, setActiveProfilePlayer] = useState<0 | 1>(0);
+  const [profileKind, setProfileKind] = useState<VisualProfileKind>("clothing");
+  const [profileMessage, setProfileMessage] = useState("");
   const [online, setOnline] = useState(true);
   const orientation = useDeviceOrientation();
   const {
@@ -78,6 +109,7 @@ export function SetupApp() {
     videoRef,
     startCamera,
     stopCamera,
+    captureVisualProfile,
   } = useCamera();
   const cameraVerified = cameraStatus === "streaming";
 
@@ -101,6 +133,16 @@ export function SetupApp() {
     [draft.players],
   );
 
+  const profilesAreReady = useMemo(
+    () =>
+      draft.players.every(
+        (player) =>
+          Boolean(player.clothingProfile) &&
+          (!player.faceConsent || Boolean(player.faceProfile)),
+      ),
+    [draft.players],
+  );
+
   const updatePlayer = (index: 0 | 1, patch: Partial<PlayerDraft>) => {
     setDraft((current) => {
       const players: [PlayerDraft, PlayerDraft] = [
@@ -112,10 +154,42 @@ export function SetupApp() {
     });
   };
 
+  const setFaceConsent = (index: 0 | 1, faceConsent: boolean) => {
+    updatePlayer(index, {
+      faceConsent,
+      ...(faceConsent ? {} : { faceProfile: null }),
+    });
+    if (!faceConsent && index === activeProfilePlayer && profileKind === "face") {
+      setProfileKind("clothing");
+    }
+  };
+
+  const selectProfileCapture = (index: 0 | 1, kind: VisualProfileKind) => {
+    setActiveProfilePlayer(index);
+    setProfileKind(kind);
+    setProfileMessage("");
+  };
+
+  const capturePlayerProfile = () => {
+    try {
+      const profile = captureVisualProfile(profileKind);
+      updatePlayer(activeProfilePlayer, {
+        [profileKind === "face" ? "faceProfile" : "clothingProfile"]: profile,
+      });
+      setProfileMessage(
+        `${draft.players[activeProfilePlayer].name.trim()}'s ${profileKind} profile is ready.`,
+      );
+    } catch (error) {
+      setProfileMessage(
+        error instanceof Error ? error.message : "The profile could not be captured.",
+      );
+    }
+  };
+
   const completeSetup = () => {
     window.localStorage.setItem(SETUP_STORAGE_KEY, JSON.stringify(draft));
     stopCamera();
-    setStep(4);
+    setStep(5);
   };
 
   return (
@@ -133,8 +207,8 @@ export function SetupApp() {
       </header>
 
       <main className="shell">
-        {step < 4 && (
-          <div className="setup-progress" aria-label={`Setup step ${step + 1} of 4`}>
+        {step < 5 && (
+          <div className="setup-progress" aria-label={`Setup step ${step + 1} of 5`}>
             {SETUP_STEPS.map((label, index) => (
               <span
                 className="progress-segment"
@@ -194,7 +268,7 @@ export function SetupApp() {
                       <strong>I agree to on-device camera processing</strong>
                       <span>
                         Camera access starts only when requested. No video or biometric
-                        data is uploaded in this milestone.
+                        data is uploaded. Player profiles remain on this device.
                       </span>
                     </label>
                   </div>
@@ -203,8 +277,9 @@ export function SetupApp() {
                     <summary>How camera data is handled</summary>
                     <p>
                       The live preview is displayed directly from your browser. Closing
-                      the preview stops its camera tracks. Optional face matching requires
-                      a separate choice for each player and is not performed yet.
+                      the preview stops its camera tracks. Optional face enrollment requires
+                      a separate choice from each player. Only compact descriptors are
+                      saved; raw profile photos and video are discarded.
                     </p>
                   </details>
 
@@ -278,16 +353,14 @@ export function SetupApp() {
                         type="checkbox"
                         checked={player.faceConsent}
                         onChange={(event) =>
-                          updatePlayer(index as 0 | 1, {
-                            faceConsent: event.target.checked,
-                          })
+                          setFaceConsent(index as 0 | 1, event.target.checked)
                         }
                       />
                       <label className="toggle-copy" htmlFor={`face-consent-${index}`}>
                         <strong>Allow local face matching</strong>
                         <span>
-                          Records consent only. Face capture arrives in a later milestone;
-                          clothing-based matching does not require this.
+                          Adds a guided face capture in the next step. Clothing-based
+                          matching is set up for every player and does not require this.
                         </span>
                       </label>
                     </div>
@@ -298,8 +371,8 @@ export function SetupApp() {
               <div className="privacy-note">
                 <span className="note-icon" aria-hidden="true">i</span>
                 <span>
-                  Consent can be changed later. No face image or embedding is collected on
-                  this screen, and nothing is sent off-device.
+                  Consent can be changed later. Face enrollment is skipped unless the
+                  player opts in, and nothing is sent off-device.
                 </span>
               </div>
 
@@ -308,7 +381,7 @@ export function SetupApp() {
                   Back
                 </button>
                 <button className="primary-button" type="submit" disabled={!namesAreValid}>
-                  Set up camera <span className="arrow">→</span>
+                  Create profiles <span className="arrow">→</span>
                 </button>
               </div>
             </form>
@@ -316,6 +389,214 @@ export function SetupApp() {
         )}
 
         {step === 2 && (
+          <section className="screen-card camera-screen profile-screen" aria-labelledby="profile-title">
+            <div className="profile-layout">
+              <div className="camera-stage profile-stage">
+                {cameraStream ? (
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    aria-label={`Live camera preview for ${draft.players[activeProfilePlayer].name.trim()}'s profile`}
+                  />
+                ) : (
+                  <div className="camera-placeholder">
+                    <span className="camera-glyph" aria-hidden="true" />
+                    <h2>Camera is off</h2>
+                    <p>
+                      Open the rear camera, then have each player stand in the guide.
+                      Profile processing stays on this device.
+                    </p>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={cameraStatus === "requesting"}
+                      onClick={() => void startCamera()}
+                    >
+                      {cameraStatus === "requesting" ? "Starting…" : "Open rear camera"}
+                    </button>
+                  </div>
+                )}
+
+                <div className="camera-top-overlay">
+                  <span className="status-pill" data-status={cameraStatus}>
+                    <span className="status-dot" aria-hidden="true" />
+                    {CAMERA_STATUS_LABELS[cameraStatus]}
+                  </span>
+                  <span className="local-chip">
+                    Player {activeProfilePlayer + 1} · {draft.players[activeProfilePlayer].name.trim()}
+                  </span>
+                </div>
+
+                {cameraStatus === "streaming" && (
+                  <div
+                    className={`profile-guide profile-guide-${profileKind}`}
+                    data-profile-guide={profileKind}
+                    aria-hidden="true"
+                  >
+                    <span className="profile-guide-label">
+                      {profileKind === "face"
+                        ? "Centre your face and look toward the camera"
+                        : "Stand naturally with your shirt and upper body visible"}
+                    </span>
+                  </div>
+                )}
+
+                {profileMessage && (
+                  <p className="capture-toast" role="status" aria-live="polite">
+                    {profileMessage}
+                  </p>
+                )}
+              </div>
+
+              <div className="profile-controls">
+                <p className="eyebrow">Step 3 · Visual identity</p>
+                <h2 id="profile-title">Teach CueSight who&apos;s playing.</h2>
+                <p className="lede">
+                  Capture the clothes each player is wearing today. Players who opted in
+                  also create a local face reference.
+                </p>
+
+                <div className="profile-roster">
+                  {draft.players.map((player, index) => {
+                    const playerIndex = index as 0 | 1;
+                    return (
+                      <div
+                        className="profile-person-card"
+                        data-active={activeProfilePlayer === playerIndex}
+                        key={player.name || index}
+                      >
+                        <div className="profile-person-heading">
+                          <span className="player-index">
+                            <span className="player-ball" aria-hidden="true" />
+                            {player.name.trim()}
+                          </span>
+                          <span className="profile-count">
+                            {Number(Boolean(player.clothingProfile)) +
+                              Number(Boolean(player.faceProfile))}
+                            /{player.faceConsent ? 2 : 1}
+                          </span>
+                        </div>
+
+                        <button
+                          className="capture-choice"
+                          data-selected={
+                            activeProfilePlayer === playerIndex && profileKind === "clothing"
+                          }
+                          type="button"
+                          onClick={() => selectProfileCapture(playerIndex, "clothing")}
+                        >
+                          <span>
+                            <strong>Clothing profile</strong>
+                            <small>{player.clothingProfile ? "Ready · tap to retake" : "Required"}</small>
+                          </span>
+                          {player.clothingProfile ? (
+                            <span className="profile-swatches" aria-label="Captured clothing colours">
+                              {player.clothingProfile.swatches.map((colour, swatchIndex) => (
+                                <span
+                                  className="profile-swatch"
+                                  style={{ backgroundColor: colour }}
+                                  key={`${colour}-${swatchIndex}`}
+                                />
+                              ))}
+                            </span>
+                          ) : (
+                            <span className="capture-state">Add</span>
+                          )}
+                        </button>
+
+                        {player.faceConsent ? (
+                          <button
+                            className="capture-choice"
+                            data-selected={
+                              activeProfilePlayer === playerIndex && profileKind === "face"
+                            }
+                            type="button"
+                            onClick={() => selectProfileCapture(playerIndex, "face")}
+                          >
+                            <span>
+                              <strong>Face reference</strong>
+                              <small>{player.faceProfile ? "Ready · tap to retake" : "Opted in · required"}</small>
+                            </span>
+                            <span className="capture-state" data-ready={Boolean(player.faceProfile)}>
+                              {player.faceProfile ? "✓" : "Add"}
+                            </span>
+                          </button>
+                        ) : (
+                          <div className="face-skipped">
+                            <span>Face reference</span>
+                            <strong>Not enabled</strong>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {cameraError && (
+                  <p className="camera-error" role="alert">{cameraError}</p>
+                )}
+
+                <div className="profile-capture-actions">
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={
+                      cameraStatus !== "streaming" ||
+                      (profileKind === "face" &&
+                        !draft.players[activeProfilePlayer].faceConsent)
+                    }
+                    onClick={capturePlayerProfile}
+                  >
+                    Capture {profileKind} profile
+                  </button>
+                  {draft.players[activeProfilePlayer].faceProfile && profileKind === "face" && (
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={() => {
+                        setFaceConsent(activeProfilePlayer, false);
+                        setProfileKind("clothing");
+                        setProfileMessage("Face data removed from this setup.");
+                      }}
+                    >
+                      Remove face data
+                    </button>
+                  )}
+                </div>
+
+                <p className="descriptor-note">
+                  Raw capture frames are discarded immediately. CueSight keeps only a
+                  compact visual descriptor and clothing colour samples in local setup data.
+                </p>
+
+                <div className="action-bar">
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={() => {
+                      stopCamera();
+                      setStep(1);
+                    }}
+                  >
+                    Back
+                  </button>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={!profilesAreReady}
+                    onClick={() => setStep(3)}
+                  >
+                    Frame the table <span className="arrow">→</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {step === 3 && (
           <section className="screen-card camera-screen" aria-labelledby="camera-title">
             <div className="camera-layout">
               <div className="camera-stage">
@@ -371,7 +652,7 @@ export function SetupApp() {
               </div>
 
               <div className="camera-controls">
-                <p className="eyebrow">Step 3 · Camera framing</p>
+                <p className="eyebrow">Step 4 · Camera framing</p>
                 <h2 id="camera-title">Mount wide. Keep still.</h2>
                 <p className="lede">
                   Place the phone on a tripod where every rail and pocket is visible, with
@@ -424,7 +705,7 @@ export function SetupApp() {
                 )}
 
                 <div className="action-bar">
-                  <button className="text-button" type="button" onClick={() => setStep(1)}>
+                  <button className="text-button" type="button" onClick={() => setStep(2)}>
                     Back
                   </button>
                   {cameraStatus === "streaming" && (
@@ -436,7 +717,7 @@ export function SetupApp() {
                     className="primary-button"
                     type="button"
                     disabled={cameraStatus !== "streaming"}
-                    onClick={() => setStep(3)}
+                    onClick={() => setStep(4)}
                   >
                     Use this view <span className="arrow">→</span>
                   </button>
@@ -446,10 +727,10 @@ export function SetupApp() {
           </section>
         )}
 
-        {step === 3 && (
+        {step === 4 && (
           <section className="screen-card" aria-labelledby="match-title">
             <div className="screen-content">
-              <p className="eyebrow">Step 4 · Match details</p>
+              <p className="eyebrow">Step 5 · Match details</p>
               <h2 id="match-title">One last look.</h2>
               <p className="lede">
                 Confirm the players and match length. Your choices are stored only on this
@@ -496,6 +777,10 @@ export function SetupApp() {
                       <dt>Face matching</dt>
                       <dd>{draft.players.filter((player) => player.faceConsent).length} opted in</dd>
                     </div>
+                    <div className="summary-row">
+                      <dt>Clothing profiles</dt>
+                      <dd>{draft.players.filter((player) => player.clothingProfile).length} ready</dd>
+                    </div>
                   </dl>
 
                   <label className="field-label" htmlFor="best-of" style={{ marginTop: 18 }}>
@@ -530,7 +815,7 @@ export function SetupApp() {
               </div>
 
               <div className="action-bar">
-                <button className="text-button" type="button" onClick={() => setStep(2)}>
+                <button className="text-button" type="button" onClick={() => setStep(3)}>
                   Back
                 </button>
                 <button className="primary-button" type="button" onClick={completeSetup}>
@@ -541,7 +826,7 @@ export function SetupApp() {
           </section>
         )}
 
-        {step === 4 && (
+        {step === 5 && (
           <section className="screen-card" aria-labelledby="complete-title">
             <div className="screen-content completion">
               <span className="completion-mark" aria-hidden="true">✓</span>
@@ -560,14 +845,14 @@ export function SetupApp() {
                 </span>
               </div>
               <div className="action-bar">
-                <button className="secondary-button" type="button" onClick={() => setStep(3)}>
+                <button className="secondary-button" type="button" onClick={() => setStep(4)}>
                   Edit match details
                 </button>
                 <button
                   className="primary-button"
                   type="button"
                   onClick={() => {
-                    setStep(2);
+                    setStep(3);
                     void startCamera();
                   }}
                 >

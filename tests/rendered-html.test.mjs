@@ -71,3 +71,25 @@ test("keeps camera and orientation concerns isolated", async () => {
   assert.match(orientationHook, /screen\.orientation/);
   assert.match(orientationLogic, /width > height \? "landscape" : "portrait"/);
 });
+
+test("includes consent-gated face and required clothing enrollment in milestone 1", async () => {
+  const [setup, camera, visualProfile, brief, readme] = await Promise.all([
+    readFile(new URL("app/components/SetupApp.tsx", projectRoot), "utf8"),
+    readFile(new URL("app/hooks/useCamera.ts", projectRoot), "utf8"),
+    readFile(new URL("app/lib/visualProfile.ts", projectRoot), "utf8"),
+    readFile(new URL("automatic_snooker_scoring_web_app.md", projectRoot), "utf8"),
+    readFile(new URL("README.md", projectRoot), "utf8"),
+  ]);
+
+  assert.match(setup, /"Privacy", "Players", "Profiles", "Camera", "Match"/);
+  assert.match(setup, /Boolean\(player\.clothingProfile\)/);
+  assert.match(setup, /!player\.faceConsent \|\| Boolean\(player\.faceProfile\)/);
+  assert.match(setup, /Remove face data/);
+  assert.match(setup, /Raw capture frames are discarded immediately/);
+  assert.match(camera, /captureVisualProfile/);
+  assert.match(visualProfile, /context\.drawImage\(/);
+  assert.match(visualProfile, /kind === "clothing" \? sampleSwatches/);
+  assert.match(brief, /guided face enrollment for players who opt in/);
+  assert.match(readme, /guided face\/clothing enrollment/);
+  assert.doesNotMatch(setup, /Face capture arrives in a later milestone/);
+});
