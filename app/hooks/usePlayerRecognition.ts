@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type Human from "@vladmandic/human";
+import type { FaceResult } from "@vladmandic/human";
 import type { TrackedPerson } from "./usePlayerTracking";
 
 export type PlayerRecognitionStatus = "idle" | "loading" | "ready" | "error";
@@ -9,6 +10,7 @@ export type ReidentificationStatus =
   | "idle"
   | "waiting-for-face"
   | "comparing"
+  | "face-matched"
   | "no-match"
   | "confirming"
   | "matched";
@@ -33,6 +35,69 @@ const ENROLLMENT_SAMPLE_COUNT = 2;
 const MAX_DESCRIPTOR_GALLERY_SIZE = 5;
 const FACE_CROP_SIZE = 320;
 const LOST_TRACK_RELEASE_MS = 10_000;
+const PENDING_FACE_MATCH_MS = 8_000;
+
+function faceThumbnail(video: HTMLVideoElement, face: FaceResult) {
+  const [faceX, faceY, faceWidth, faceHeight] = face.box;
+  const side = Math.max(faceWidth, faceHeight) * 1.55;
+  const sourceX = Math.max(
+    0,
+    Math.min(video.videoWidth - side, faceX + faceWidth / 2 - side / 2),
+  );
+  const sourceY = Math.max(
+    0,
+    Math.min(video.videoHeight - side, faceY + faceHeight / 2 - side / 2),
+  );
+  const sourceSide = Math.min(
+    side,
+    video.videoWidth - sourceX,
+    video.videoHeight - sourceY,
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = 160;
+  canvas.height = 160;
+  const context = canvas.getContext("2d");
+  if (!context) return "";
+  context.drawImage(
+    video,
+    sourceX,
+    sourceY,
+    sourceSide,
+    sourceSide,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+  return canvas.toDataURL("image/jpeg", 0.82);
+}
+
+function trackForFace(face: FaceResult, people: TrackedPerson[]) {
+  const [faceX, faceY, faceWidth, faceHeight] = face.box;
+  const faceCenterX = faceX + faceWidth / 2;
+  const faceCenterY = faceY + faceHeight / 2;
+
+  return [...people]
+    .filter((person) => {
+      const xMin = person.centerX - person.width / 2;
+      const yMin = person.centerY - person.height / 2;
+      return (
+        faceCenterX >= xMin - person.width * 0.18 &&
+        faceCenterX <= xMin + person.width * 1.18 &&
+        faceCenterY >= yMin - person.height * 0.18 &&
+        faceCenterY <= yMin + person.height * 0.62
+      );
+    })
+    .sort((left, right) => {
+      const leftDistance =
+        Math.abs(left.centerX - faceCenterX) / Math.max(left.width, 1) +
+        Math.abs(left.centerY - faceCenterY) / Math.max(left.height, 1);
+      const rightDistance =
+        Math.abs(right.centerX - faceCenterX) / Math.max(right.width, 1) +
+        Math.abs(right.centerY - faceCenterY) / Math.max(right.height, 1);
+      return leftDistance - rightDistance;
+    })[0] ?? null;
+}
 
 function trackDistance(previous: TrackedPerson, current: TrackedPerson) {
   const width = Math.max(previous.width, current.width, 1);
@@ -168,6 +233,7 @@ export function usePlayerRecognition(
   const processingRef = useRef(false);
   const votesRef = useRef(new Map<string, number>());
   const missingSinceRef = useRef<[number | null, number | null]>([null, null]);
+  const pendingFaceMatchesRef = useRef<[number, number]>([0, 0]);
   const loadGenerationRef = useRef(0);
   const [status, setStatus] = useState<PlayerRecognitionStatus>("idle");
   const [errorMessage, setErrorMessage] = useState("");
@@ -326,28 +392,26 @@ export function usePlayerRecognition(
 
       processingRef.current = true;
       try {
-        const headCrop = cropTrackedPersonHead(videoElement, person);
-        if (!headCrop) {
-          throw new Error("Move closer so the selected player's head is clear in the guide.");
-        }
         const descriptors: number[][] = [];
         let thumbnail = "";
         for (let sampleIndex = 0; sampleIndex < ENROLLMENT_SAMPLE_COUNT; sampleIndex += 1) {
-          const refreshedHeadCrop = cropTrackedPersonHead(videoElement, person) ?? headCrop;
-          const result = await human.detect(refreshedHeadCrop);
+          const result = await human.detect(videoElement);
           const usableFaces = result.face.filter(
-            (face) => face.embedding && face.embedding.length >= 64 && face.size[0] >= 64,
+            (face) => face.embedding && face.embedding.length >= 64 && face.size[0] >= 32,
           );
-          if (usableFaces.length !== 1) {
+          const selectedFace =
+            usableFaces.find(
+              (face) => trackForFace(face, peopleRef.current)?.trackId === person.trackId,
+            ) ?? (usableFaces.length === 1 ? usableFaces[0] : null);
+          if (!selectedFace) {
             throw new Error(
               usableFaces.length === 0
-                ? "No clear face was found. Move closer, face the camera, and try again."
-                : "More than one face is visible. Keep only the selected player in the guide.",
+                ? "No face was found. Look directly at the camera and keep your face inside the guide."
+                : "The selected player's face could not be linked to their body. Keep the other player out of view and try again.",
             );
           }
-          const face = usableFaces[0];
-          descriptors.push([...(face.embedding ?? [])]);
-          if (!thumbnail) thumbnail = refreshedHeadCrop.toDataURL("image/jpeg", 0.82);
+          descriptors.push([...(selectedFace.embedding ?? [])]);
+          if (!thumbnail) thumbnail = faceThumbnail(videoElement, selectedFace);
           if (sampleIndex + 1 < ENROLLMENT_SAMPLE_COUNT) {
             await new Promise((resolve) => window.setTimeout(resolve, 180));
           }
@@ -396,12 +460,14 @@ export function usePlayerRecognition(
       assignmentsRef.current = next;
       return next;
     });
+    pendingFaceMatchesRef.current[playerIndex] = 0;
     votesRef.current.clear();
   }, []);
 
   const resetAssignments = useCallback(() => {
     assignmentsRef.current = [null, null];
     identityAnchorsRef.current = [null, null];
+    pendingFaceMatchesRef.current = [0, 0];
     setPlayerTrackIds([null, null]);
     votesRef.current.clear();
   }, []);
@@ -433,7 +499,8 @@ export function usePlayerRecognition(
         cancelled ||
         processingRef.current ||
         videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
-        peopleRef.current.length === 0
+        !memoriesRef.current[0] ||
+        !memoriesRef.current[1]
       ) {
         scheduleRecognition();
         return;
@@ -457,9 +524,36 @@ export function usePlayerRecognition(
         }> = [];
         const seenVoteKeys = new Set<string>();
         let faceFound = false;
+        let matchedFaceFound = false;
         setReidentificationStatus(tracksToIdentify.length > 0 ? "waiting-for-face" : "idle");
 
+        const fullFrameResult = await human.detect(videoElement);
+        if (cancelled) return;
+        for (const face of fullFrameResult.face) {
+          if (!face.embedding || face.embedding.length < 64) continue;
+          faceFound = true;
+          setReidentificationStatus("comparing");
+          const descriptor = [...face.embedding];
+          const match = matchDescriptorToPlayer(human, descriptor, memoriesRef.current);
+          if (!match.matched) continue;
+          matchedFaceFound = true;
+          const track = trackForFace(face, tracksToIdentify);
+          if (track) {
+            candidates.push({
+              descriptor,
+              playerIndex: match.playerIndex,
+              similarity: match.similarity,
+              trackId: track.trackId,
+            });
+          } else {
+            pendingFaceMatchesRef.current[match.playerIndex] =
+              Date.now() + PENDING_FACE_MATCH_MS;
+            setReidentificationStatus("face-matched");
+          }
+        }
+
         for (const track of tracksToIdentify) {
+          if (candidates.some((candidate) => candidate.trackId === track.trackId)) continue;
           const headCrop = cropTrackedPersonHead(videoElement, track);
           if (!headCrop) continue;
           const result = await human.detect(headCrop);
@@ -473,6 +567,7 @@ export function usePlayerRecognition(
           const descriptor = [...face.embedding];
           const match = matchDescriptorToPlayer(human, descriptor, memoriesRef.current);
           if (!match.matched) continue;
+          matchedFaceFound = true;
           candidates.push({
             descriptor,
             playerIndex: match.playerIndex,
@@ -481,9 +576,25 @@ export function usePlayerRecognition(
           });
         }
 
+        const candidateTrackIds = new Set(candidates.map((candidate) => candidate.trackId));
+        const unmatchedTracks = tracksToIdentify.filter(
+          (track) => !candidateTrackIds.has(track.trackId),
+        );
+        const pendingPlayers = ([0, 1] as const).filter(
+          (playerIndex) => pendingFaceMatchesRef.current[playerIndex] >= Date.now(),
+        );
+        if (unmatchedTracks.length === 1 && pendingPlayers.length === 1) {
+          candidates.push({
+            descriptor: [],
+            playerIndex: pendingPlayers[0],
+            similarity: 1,
+            trackId: unmatchedTracks[0].trackId,
+          });
+        }
+
         if (tracksToIdentify.length > 0 && !faceFound) {
           setReidentificationStatus("waiting-for-face");
-        } else if (faceFound && candidates.length === 0) {
+        } else if (faceFound && !matchedFaceFound) {
           setReidentificationStatus("no-match");
         }
 
@@ -503,9 +614,14 @@ export function usePlayerRecognition(
             missingSinceRef.current[candidate.playerIndex] = null;
             setReidentificationStatus("matched");
             const memory = memoriesRef.current[candidate.playerIndex];
-            if (memory && memory.descriptors.length < MAX_DESCRIPTOR_GALLERY_SIZE) {
+            if (
+              memory &&
+              candidate.descriptor.length > 0 &&
+              memory.descriptors.length < MAX_DESCRIPTOR_GALLERY_SIZE
+            ) {
               memory.descriptors.push(candidate.descriptor);
             }
+            pendingFaceMatchesRef.current[candidate.playerIndex] = 0;
           }
         }
 
