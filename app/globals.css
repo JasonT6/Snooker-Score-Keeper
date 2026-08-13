@@ -930,18 +930,30 @@ h2 {
 
 .profile-layout {
   display: grid;
-  gap: 22px;
+  gap: 14px;
   min-height: 100%;
 }
 
 .profile-controls {
   display: flex;
+  gap: 10px;
   flex-direction: column;
 }
 
-.profile-controls .lede {
-  margin-bottom: 16px;
-  font-size: 15px;
+.profile-intro .eyebrow {
+  margin-bottom: 7px;
+}
+
+.profile-intro h2 {
+  margin-bottom: 5px;
+  font-size: clamp(25px, 4vw, 34px);
+}
+
+.profile-intro p:last-child {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .profile-guide {
@@ -971,7 +983,7 @@ h2 {
 
 .profile-guide-label {
   position: absolute;
-  bottom: -42px;
+  bottom: -36px;
   left: 50%;
   width: max-content;
   max-width: min(78vw, 350px);
@@ -1006,14 +1018,18 @@ h2 {
 
 .profile-roster {
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .profile-person-card {
-  padding: 12px;
+  min-width: 0;
+  padding: 9px 10px;
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 14px;
   background: rgba(255, 255, 255, 0.02);
+  color: var(--ink);
+  text-align: left;
   transition: border-color 160ms ease, background 160ms ease;
 }
 
@@ -1030,17 +1046,28 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 9px;
+  margin-bottom: 4px;
+}
+
+.profile-person-heading .player-index {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tracker-binding {
   display: block;
-  margin: -3px 0 6px 23px;
+  margin-left: 23px;
+  overflow: hidden;
   color: var(--faint);
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.04em;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .tracker-binding[data-ready="true"] {
@@ -1049,14 +1076,27 @@ h2 {
 
 .profile-count {
   display: grid;
-  min-width: 34px;
-  min-height: 25px;
+  min-width: 30px;
+  min-height: 22px;
   place-items: center;
   border-radius: 999px;
   background: rgba(112, 226, 160, 0.08);
   color: var(--green);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 780;
+}
+
+.registration-panel {
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: rgba(0, 0, 0, 0.13);
+}
+
+.capture-type-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .capture-choice {
@@ -1065,14 +1105,19 @@ h2 {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  min-height: 50px;
-  margin-top: 7px;
+  min-height: 52px;
+  margin: 0;
   padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.15);
   color: var(--ink);
   text-align: left;
+}
+
+.capture-choice:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
 }
 
 .capture-choice:hover,
@@ -1133,39 +1178,45 @@ h2 {
   margin-left: -4px;
 }
 
-.face-skipped {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 40px;
-  padding: 8px 10px;
-  color: var(--faint);
-  font-size: 11px;
-}
-
-.face-skipped strong {
-  font-size: 10px;
-  font-weight: 720;
-}
-
 .profile-capture-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  margin-top: 13px;
+  margin-top: 9px;
 }
 
 .profile-capture-actions .primary-button {
+  flex: 1 1 190px;
   min-height: 46px;
   font-size: 13px;
 }
 
 .descriptor-note {
-  margin: 10px 0 0;
+  margin: -4px 2px 0;
   color: var(--faint);
-  font-size: 10px;
-  line-height: 1.45;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.profile-nav {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.42fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-top: auto;
+}
+
+.profile-nav .primary-button,
+.profile-nav .text-button {
+  min-height: 46px;
+}
+
+.profile-nav .primary-button {
+  min-width: 0;
+}
+
+.profile-nav .arrow {
+  margin-left: 10px;
 }
 
 .tracker-strip {
@@ -1468,11 +1519,6 @@ h2 {
     font-size: 27px;
   }
 
-  .profile-controls .lede {
-    margin-bottom: 8px;
-    font-size: 13px;
-  }
-
   .profile-person-card {
     padding: 8px 10px;
   }
@@ -1512,6 +1558,34 @@ h2 {
 
   .camera-stage video {
     min-height: 385px;
+  }
+
+  .profile-stage,
+  .profile-stage video {
+    min-height: 300px;
+  }
+
+  .profile-guide-label {
+    bottom: -32px;
+    max-width: 72vw;
+    padding: 6px 9px;
+    font-size: 10px;
+  }
+
+  .profile-intro h2 {
+    font-size: 25px;
+  }
+
+  .profile-intro p:last-child {
+    font-size: 11px;
+  }
+
+  .profile-count {
+    display: none;
+  }
+
+  .profile-nav .text-button {
+    grid-row: auto;
   }
 
   .action-bar {

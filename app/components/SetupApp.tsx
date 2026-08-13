@@ -544,21 +544,33 @@ export function SetupApp() {
               </div>
 
               <div className="profile-controls">
-                <p className="eyebrow">Step 3 · Visual identity</p>
-                <h2 id="profile-title">Teach CueSight who&apos;s playing.</h2>
-                <p className="lede">
-                  Capture the clothes each player is wearing today. Players who opted in
-                  also create a local face reference. Have only the selected player stand
-                  in the guide so their live tracking ID can be linked.
-                </p>
+                <div className="profile-intro">
+                  <p className="eyebrow">Step 3 · Visual identity</p>
+                  <h2 id="profile-title">Register each player.</h2>
+                  <p>
+                    Select a player and profile type, then capture. Keep only that player
+                    in the guide.
+                  </p>
+                </div>
 
-                <div className="profile-roster">
+                <div className="profile-roster" role="tablist" aria-label="Player to register">
                   {draft.players.map((player, index) => {
                     const playerIndex = index as 0 | 1;
                     return (
-                      <div
+                      <button
                         className="profile-person-card"
                         data-active={activeProfilePlayer === playerIndex}
+                        type="button"
+                        role="tab"
+                        aria-selected={activeProfilePlayer === playerIndex}
+                        onClick={() =>
+                          selectProfileCapture(
+                            playerIndex,
+                            profileKind === "face" && !player.faceConsent
+                              ? "clothing"
+                              : profileKind,
+                          )
+                        }
                         key={player.name || index}
                       >
                         <div className="profile-person-heading">
@@ -577,121 +589,125 @@ export function SetupApp() {
                           data-ready={typeof playerTrackIds[playerIndex] === "number"}
                         >
                           {typeof playerTrackIds[playerIndex] === "number"
-                            ? `Live track ${playerTrackIds[playerIndex]} linked`
-                            : "Live tracking ID not linked"}
+                            ? `Track ${playerTrackIds[playerIndex]} linked`
+                            : "Tracking not linked"}
                         </span>
-
-                        <button
-                          className="capture-choice"
-                          data-selected={
-                            activeProfilePlayer === playerIndex && profileKind === "clothing"
-                          }
-                          type="button"
-                          onClick={() => selectProfileCapture(playerIndex, "clothing")}
-                        >
-                          <span>
-                            <strong>Clothing profile</strong>
-                            <small>{player.clothingProfile ? "Ready · tap to retake" : "Required"}</small>
-                          </span>
-                          {player.clothingProfile ? (
-                            <span className="profile-swatches" aria-label="Captured clothing colours">
-                              {player.clothingProfile.swatches.map((colour, swatchIndex) => (
-                                <span
-                                  className="profile-swatch"
-                                  style={{ backgroundColor: colour }}
-                                  key={`${colour}-${swatchIndex}`}
-                                />
-                              ))}
-                            </span>
-                          ) : (
-                            <span className="capture-state">Add</span>
-                          )}
-                        </button>
-
-                        {player.faceConsent ? (
-                          <button
-                            className="capture-choice"
-                            data-selected={
-                              activeProfilePlayer === playerIndex && profileKind === "face"
-                            }
-                            type="button"
-                            onClick={() => selectProfileCapture(playerIndex, "face")}
-                          >
-                            <span>
-                              <strong>Face reference</strong>
-                              <small>{player.faceProfile ? "Ready · tap to retake" : "Opted in · required"}</small>
-                            </span>
-                            <span className="capture-state" data-ready={Boolean(player.faceProfile)}>
-                              {player.faceProfile ? "✓" : "Add"}
-                            </span>
-                          </button>
-                        ) : (
-                          <div className="face-skipped">
-                            <span>Face reference</span>
-                            <strong>Not enabled</strong>
-                          </div>
-                        )}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
 
-                {cameraError && (
-                  <p className="camera-error" role="alert">{cameraError}</p>
-                )}
-                {playerTrackingError && (
-                  <div className="camera-error" role="alert">
-                    <span>{playerTrackingError}</span>
+                <div className="registration-panel">
+                  <div className="capture-type-row" aria-label="Profile type">
                     <button
-                      className="inline-retry"
+                      className="capture-choice"
+                      data-selected={profileKind === "clothing"}
                       type="button"
-                      onClick={() => {
-                        setPlayerTrackIds([null, null]);
-                        resetTracker();
-                      }}
+                      onClick={() => selectProfileCapture(activeProfilePlayer, "clothing")}
                     >
-                      Retry player tracker
+                      <span>
+                        <strong>Clothing</strong>
+                        <small>
+                          {draft.players[activeProfilePlayer].clothingProfile
+                            ? "Ready · retake"
+                            : "Required"}
+                        </small>
+                      </span>
+                      {draft.players[activeProfilePlayer].clothingProfile ? (
+                        <span className="profile-swatches" aria-label="Captured clothing colours">
+                          {draft.players[activeProfilePlayer].clothingProfile.swatches.map(
+                            (colour, swatchIndex) => (
+                              <span
+                                className="profile-swatch"
+                                style={{ backgroundColor: colour }}
+                                key={`${colour}-${swatchIndex}`}
+                              />
+                            ),
+                          )}
+                        </span>
+                      ) : (
+                        <span className="capture-state">Add</span>
+                      )}
+                    </button>
+
+                    <button
+                      className="capture-choice"
+                      data-selected={profileKind === "face"}
+                      type="button"
+                      disabled={!draft.players[activeProfilePlayer].faceConsent}
+                      onClick={() => selectProfileCapture(activeProfilePlayer, "face")}
+                    >
+                      <span>
+                        <strong>Face</strong>
+                        <small>
+                          {!draft.players[activeProfilePlayer].faceConsent
+                            ? "Not enabled"
+                            : draft.players[activeProfilePlayer].faceProfile
+                              ? "Ready · retake"
+                              : "Required"}
+                        </small>
+                      </span>
+                      <span
+                        className="capture-state"
+                        data-ready={Boolean(draft.players[activeProfilePlayer].faceProfile)}
+                      >
+                        {draft.players[activeProfilePlayer].faceProfile ? "✓" : "Add"}
+                      </span>
                     </button>
                   </div>
-                )}
 
-                <div className="profile-capture-actions">
-                  <button
-                    className="primary-button"
-                    type="button"
-                    disabled={
-                      cameraStatus !== "streaming" ||
-                      playerTrackingStatus !== "tracking" ||
-                      !centredTrackedPerson ||
-                      (profileKind === "face" &&
-                        (!draft.players[activeProfilePlayer].faceConsent ||
-                          typeof playerTrackIds[activeProfilePlayer] !== "number"))
-                    }
-                    onClick={capturePlayerProfile}
-                  >
-                    Capture {profileKind} profile
-                  </button>
-                  {draft.players[activeProfilePlayer].faceProfile && profileKind === "face" && (
-                    <button
-                      className="text-button"
-                      type="button"
-                      onClick={() => {
-                        setFaceConsent(activeProfilePlayer, false);
-                        setProfileKind("clothing");
-                        setProfileMessage("Face data removed from this setup.");
-                      }}
-                    >
-                      Remove face data
-                    </button>
+                  {cameraError && (
+                    <p className="camera-error" role="alert">{cameraError}</p>
                   )}
+                  {playerTrackingError && (
+                    <div className="camera-error" role="alert">
+                      <span>{playerTrackingError}</span>
+                      <button
+                        className="inline-retry"
+                        type="button"
+                        onClick={() => {
+                          setPlayerTrackIds([null, null]);
+                          resetTracker();
+                        }}
+                      >
+                        Retry player tracker
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="profile-capture-actions">
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={
+                        cameraStatus !== "streaming" ||
+                        playerTrackingStatus !== "tracking" ||
+                        !centredTrackedPerson ||
+                        (profileKind === "face" &&
+                          (!draft.players[activeProfilePlayer].faceConsent ||
+                            typeof playerTrackIds[activeProfilePlayer] !== "number"))
+                      }
+                      onClick={capturePlayerProfile}
+                    >
+                      Capture {draft.players[activeProfilePlayer].name.trim()}&apos;s {profileKind}
+                    </button>
+                    {draft.players[activeProfilePlayer].faceProfile && profileKind === "face" && (
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => {
+                          setFaceConsent(activeProfilePlayer, false);
+                          setProfileKind("clothing");
+                          setProfileMessage("Face data removed from this setup.");
+                        }}
+                      >
+                        Remove face data
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                <p className="descriptor-note">
-                  Raw capture frames are discarded immediately. CueSight keeps only a
-                  compact visual descriptor and clothing colour samples in local setup data.
-                </p>
-
-                <div className="action-bar">
+                <div className="profile-nav">
                   <button
                     className="text-button"
                     type="button"
@@ -711,6 +727,10 @@ export function SetupApp() {
                     Frame the table <span className="arrow">→</span>
                   </button>
                 </div>
+
+                <p className="descriptor-note">
+                  Raw frames are discarded; only compact local descriptors are kept.
+                </p>
               </div>
             </div>
           </section>

@@ -87,7 +87,9 @@ test("includes consent-gated face and required clothing enrollment in milestone 
   assert.match(setup, /Boolean\(player\.clothingProfile\)/);
   assert.match(setup, /!player\.faceConsent \|\| Boolean\(player\.faceProfile\)/);
   assert.match(setup, /Remove face data/);
-  assert.match(setup, /Raw capture frames are discarded immediately/);
+  assert.match(setup, /Raw frames are discarded/);
+  assert.match(setup, /className="profile-nav"/);
+  assert.match(setup, /className="capture-type-row"/);
   assert.match(camera, /captureVisualProfile/);
   assert.match(visualProfile, /context\.drawImage\(/);
   assert.match(visualProfile, /kind === "clothing" \? sampleSwatches/);
@@ -96,7 +98,7 @@ test("includes consent-gated face and required clothing enrollment in milestone 
   assert.match(playerTracking, /maxTracks: 2/);
   assert.match(playerTracking, /maxPoses: 2/);
   assert.match(setup, /playerTracksAreLinked/);
-  assert.match(setup, /Live track.*linked/);
+  assert.match(setup, /Track.*linked/);
   assert.match(packageJson, /@tensorflow-models\/pose-detection/);
   assert.match(brief, /guided face enrollment for players who opt in/);
   assert.match(brief, /MoveNet MultiPose tracker/);
