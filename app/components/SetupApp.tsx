@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useCamera, type CameraStatus } from "../hooks/useCamera";
 import { useDeviceOrientation } from "../hooks/useDeviceOrientation";
+import {
+  usePlayerTracking,
+  type TrackedPerson,
+} from "../hooks/usePlayerTracking";
 import type { VisualProfile, VisualProfileKind } from "../lib/visualProfile";
 import { ServiceWorkerRegistration } from "./ServiceWorkerRegistration";
 
@@ -91,6 +95,21 @@ function readProfile(value: unknown, kind: VisualProfileKind): VisualProfile | n
   return profile as VisualProfile;
 }
 
+function closestPersonToFrameCentre(
+  people: TrackedPerson[],
+  videoElement: HTMLVideoElement | null,
+) {
+  const width = videoElement?.videoWidth || 1;
+  const height = videoElement?.videoHeight || 1;
+  return [...people].sort((left, right) => {
+    const leftDistance =
+      Math.abs(left.centerX / width - 0.5) + Math.abs(left.centerY / height - 0.5);
+    const rightDistance =
+      Math.abs(right.centerX / width - 0.5) + Math.abs(right.centerY / height - 0.5);
+    return leftDistance - rightDistance;
+  })[0] ?? null;
+}
+
 export function SetupApp() {
   const [step, setStep] = useState(0);
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
@@ -98,6 +117,9 @@ export function SetupApp() {
   const [activeProfilePlayer, setActiveProfilePlayer] = useState<0 | 1>(0);
   const [profileKind, setProfileKind] = useState<VisualProfileKind>("clothing");
   const [profileMessage, setProfileMessage] = useState("");
+  const [playerTrackIds, setPlayerTrackIds] = useState<
+    [number | null, number | null]
+  >([null, null]);
   const [online, setOnline] = useState(true);
   const orientation = useDeviceOrientation();
   const {
@@ -106,12 +128,20 @@ export function SetupApp() {
     devices: cameraDevices,
     selectedDeviceId,
     errorMessage: cameraError,
+    videoElement,
     videoRef,
     startCamera,
     stopCamera,
     captureVisualProfile,
   } = useCamera();
   const cameraVerified = cameraStatus === "streaming";
+  const trackingEnabled = cameraVerified && step >= 2 && step <= 4;
+  const {
+    status: playerTrackingStatus,
+    people: trackedPeople,
+    errorMessage: playerTrackingError,
+    resetTracker,
+  } = usePlayerTracking(videoElement, trackingEnabled);
 
   useEffect(() => {
     const syncConnection = () => setOnline(navigator.onLine);
@@ -141,6 +171,13 @@ export function SetupApp() {
           (!player.faceConsent || Boolean(player.faceProfile)),
       ),
     [draft.players],
+  );
+  const playerTracksAreLinked = playerTrackIds.every(
+    (trackId) => typeof trackId === "number",
+  );
+  const centredTrackedPerson = useMemo(
+    () => closestPersonToFrameCentre(trackedPeople, videoElement),
+    [trackedPeople, videoElement],
   );
 
   const updatePlayer = (index: 0 | 1, patch: Partial<PlayerDraft>) => {
@@ -172,12 +209,44 @@ export function SetupApp() {
 
   const capturePlayerProfile = () => {
     try {
+      if (playerTrackingStatus !== "tracking" || !centredTrackedPerson) {
+        throw new Error("Wait until the player tracker finds the person in the guide.");
+      }
+
+      const otherPlayer = activeProfilePlayer === 0 ? 1 : 0;
+      if (playerTrackIds[otherPlayer] === centredTrackedPerson.trackId) {
+        throw new Error(
+          `That person is already linked to ${draft.players[otherPlayer].name.trim()}. ` +
+            `Have ${draft.players[activeProfilePlayer].name.trim()} stand alone in the guide.`,
+        );
+      }
+
+      if (
+        profileKind === "face" &&
+        playerTrackIds[activeProfilePlayer] !== centredTrackedPerson.trackId
+      ) {
+        throw new Error(
+          `Capture ${draft.players[activeProfilePlayer].name.trim()}'s clothing profile first ` +
+            "to link their tracking ID.",
+        );
+      }
+
       const profile = captureVisualProfile(profileKind);
       updatePlayer(activeProfilePlayer, {
         [profileKind === "face" ? "faceProfile" : "clothingProfile"]: profile,
       });
+      if (profileKind === "clothing") {
+        setPlayerTrackIds((current) => {
+          const next: [number | null, number | null] = [...current];
+          next[activeProfilePlayer] = centredTrackedPerson.trackId;
+          return next;
+        });
+      }
       setProfileMessage(
-        `${draft.players[activeProfilePlayer].name.trim()}'s ${profileKind} profile is ready.`,
+        `${draft.players[activeProfilePlayer].name.trim()}'s ${profileKind} profile is ready` +
+          (profileKind === "clothing"
+            ? ` and linked to track ${centredTrackedPerson.trackId}.`
+            : "."),
       );
     } catch (error) {
       setProfileMessage(
@@ -186,9 +255,23 @@ export function SetupApp() {
     }
   };
 
+  const stopCameraAndTracking = () => {
+    setPlayerTrackIds([null, null]);
+    resetTracker();
+    stopCamera();
+  };
+
+  const startCameraAndResetTracking = (deviceId?: string) => {
+    if (cameraVerified) {
+      setPlayerTrackIds([null, null]);
+      resetTracker();
+    }
+    return startCamera(deviceId);
+  };
+
   const completeSetup = () => {
     window.localStorage.setItem(SETUP_STORAGE_KEY, JSON.stringify(draft));
-    stopCamera();
+    stopCameraAndTracking();
     setStep(5);
   };
 
@@ -412,7 +495,7 @@ export function SetupApp() {
                       className="primary-button"
                       type="button"
                       disabled={cameraStatus === "requesting"}
-                      onClick={() => void startCamera()}
+                      onClick={() => void startCameraAndResetTracking()}
                     >
                       {cameraStatus === "requesting" ? "Starting…" : "Open rear camera"}
                     </button>
@@ -426,6 +509,16 @@ export function SetupApp() {
                   </span>
                   <span className="local-chip">
                     Player {activeProfilePlayer + 1} · {draft.players[activeProfilePlayer].name.trim()}
+                  </span>
+                  <span className="tracking-pill" data-status={playerTrackingStatus}>
+                    <span className="tracking-dot" aria-hidden="true" />
+                    {playerTrackingStatus === "loading"
+                      ? "Loading player tracker"
+                      : playerTrackingStatus === "tracking"
+                        ? `${trackedPeople.length} ${trackedPeople.length === 1 ? "person" : "people"} tracked`
+                        : playerTrackingStatus === "error"
+                          ? "Tracker needs attention"
+                          : "Tracker waiting"}
                   </span>
                 </div>
 
@@ -455,7 +548,8 @@ export function SetupApp() {
                 <h2 id="profile-title">Teach CueSight who&apos;s playing.</h2>
                 <p className="lede">
                   Capture the clothes each player is wearing today. Players who opted in
-                  also create a local face reference.
+                  also create a local face reference. Have only the selected player stand
+                  in the guide so their live tracking ID can be linked.
                 </p>
 
                 <div className="profile-roster">
@@ -478,6 +572,14 @@ export function SetupApp() {
                             /{player.faceConsent ? 2 : 1}
                           </span>
                         </div>
+                        <span
+                          className="tracker-binding"
+                          data-ready={typeof playerTrackIds[playerIndex] === "number"}
+                        >
+                          {typeof playerTrackIds[playerIndex] === "number"
+                            ? `Live track ${playerTrackIds[playerIndex]} linked`
+                            : "Live tracking ID not linked"}
+                        </span>
 
                         <button
                           className="capture-choice"
@@ -537,6 +639,21 @@ export function SetupApp() {
                 {cameraError && (
                   <p className="camera-error" role="alert">{cameraError}</p>
                 )}
+                {playerTrackingError && (
+                  <div className="camera-error" role="alert">
+                    <span>{playerTrackingError}</span>
+                    <button
+                      className="inline-retry"
+                      type="button"
+                      onClick={() => {
+                        setPlayerTrackIds([null, null]);
+                        resetTracker();
+                      }}
+                    >
+                      Retry player tracker
+                    </button>
+                  </div>
+                )}
 
                 <div className="profile-capture-actions">
                   <button
@@ -544,8 +661,11 @@ export function SetupApp() {
                     type="button"
                     disabled={
                       cameraStatus !== "streaming" ||
+                      playerTrackingStatus !== "tracking" ||
+                      !centredTrackedPerson ||
                       (profileKind === "face" &&
-                        !draft.players[activeProfilePlayer].faceConsent)
+                        (!draft.players[activeProfilePlayer].faceConsent ||
+                          typeof playerTrackIds[activeProfilePlayer] !== "number"))
                     }
                     onClick={capturePlayerProfile}
                   >
@@ -576,7 +696,7 @@ export function SetupApp() {
                     className="text-button"
                     type="button"
                     onClick={() => {
-                      stopCamera();
+                      stopCameraAndTracking();
                       setStep(1);
                     }}
                   >
@@ -585,7 +705,7 @@ export function SetupApp() {
                   <button
                     className="primary-button"
                     type="button"
-                    disabled={!profilesAreReady}
+                    disabled={!profilesAreReady || !playerTracksAreLinked}
                     onClick={() => setStep(3)}
                   >
                     Frame the table <span className="arrow">→</span>
@@ -620,7 +740,7 @@ export function SetupApp() {
                       className="primary-button"
                       type="button"
                       disabled={cameraStatus === "requesting"}
-                      onClick={() => void startCamera()}
+                      onClick={() => void startCameraAndResetTracking()}
                     >
                       {cameraStatus === "requesting" ? "Starting…" : "Open rear camera"}
                     </button>
@@ -647,6 +767,27 @@ export function SetupApp() {
                     <span className="guide-label">
                       Keep the table, six pockets, and player space inside the view
                     </span>
+                  </div>
+                )}
+
+                {cameraStatus === "streaming" && (
+                  <div className="tracker-strip" aria-live="polite">
+                    <span className="tracker-strip-label">
+                      {playerTrackingStatus === "loading" ? "Starting tracker" : "Player tracking"}
+                    </span>
+                    {trackedPeople.map((person) => {
+                      const playerIndex = playerTrackIds.findIndex(
+                        (trackId) => trackId === person.trackId,
+                      );
+                      return (
+                        <span className="tracked-person-chip" key={person.trackId}>
+                          <span className="tracking-dot" aria-hidden="true" />
+                          {playerIndex >= 0
+                            ? draft.players[playerIndex].name.trim()
+                            : `Unassigned track ${person.trackId}`}
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -676,12 +817,27 @@ export function SetupApp() {
                     </span>
                     Live framing preview
                   </li>
+                  <li className="check-item" data-ready={playerTrackingStatus === "tracking"}>
+                    <span className="check-mark" aria-hidden="true">
+                      {playerTrackingStatus === "tracking" ? "✓" : "4"}
+                    </span>
+                    MoveNet two-person tracker ready
+                  </li>
+                  <li className="check-item" data-ready={playerTracksAreLinked}>
+                    <span className="check-mark" aria-hidden="true">
+                      {playerTracksAreLinked ? "✓" : "5"}
+                    </span>
+                    {playerTrackIds.filter((trackId) => typeof trackId === "number").length}/2 player IDs linked
+                  </li>
                 </ul>
 
                 {cameraError && (
                   <p className="camera-error" role="alert">
                     {cameraError}
                   </p>
+                )}
+                {playerTrackingError && (
+                  <p className="camera-error" role="alert">{playerTrackingError}</p>
                 )}
 
                 {cameraDevices.length > 1 && (
@@ -693,7 +849,9 @@ export function SetupApp() {
                       className="select-field"
                       id="camera-device"
                       value={selectedDeviceId}
-                      onChange={(event) => void startCamera(event.target.value)}
+                      onChange={(event) =>
+                        void startCameraAndResetTracking(event.target.value)
+                      }
                     >
                       {cameraDevices.map((device) => (
                         <option value={device.deviceId} key={device.deviceId}>
@@ -709,14 +867,22 @@ export function SetupApp() {
                     Back
                   </button>
                   {cameraStatus === "streaming" && (
-                    <button className="secondary-button" type="button" onClick={stopCamera}>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={stopCameraAndTracking}
+                    >
                       Stop camera
                     </button>
                   )}
                   <button
                     className="primary-button"
                     type="button"
-                    disabled={cameraStatus !== "streaming"}
+                    disabled={
+                      cameraStatus !== "streaming" ||
+                      playerTrackingStatus !== "tracking" ||
+                      !playerTracksAreLinked
+                    }
                     onClick={() => setStep(4)}
                   >
                     Use this view <span className="arrow">→</span>
@@ -780,6 +946,10 @@ export function SetupApp() {
                     <div className="summary-row">
                       <dt>Clothing profiles</dt>
                       <dd>{draft.players.filter((player) => player.clothingProfile).length} ready</dd>
+                    </div>
+                    <div className="summary-row">
+                      <dt>Player tracking</dt>
+                      <dd>{playerTracksAreLinked ? "Player 1 and Player 2 linked" : "Not linked"}</dd>
                     </div>
                   </dl>
 
@@ -853,7 +1023,7 @@ export function SetupApp() {
                   type="button"
                   onClick={() => {
                     setStep(3);
-                    void startCamera();
+                    void startCameraAndResetTracking();
                   }}
                 >
                   Reopen camera

@@ -73,12 +73,14 @@ test("keeps camera and orientation concerns isolated", async () => {
 });
 
 test("includes consent-gated face and required clothing enrollment in milestone 1", async () => {
-  const [setup, camera, visualProfile, brief, readme] = await Promise.all([
+  const [setup, camera, playerTracking, visualProfile, brief, readme, packageJson] = await Promise.all([
     readFile(new URL("app/components/SetupApp.tsx", projectRoot), "utf8"),
     readFile(new URL("app/hooks/useCamera.ts", projectRoot), "utf8"),
+    readFile(new URL("app/hooks/usePlayerTracking.ts", projectRoot), "utf8"),
     readFile(new URL("app/lib/visualProfile.ts", projectRoot), "utf8"),
     readFile(new URL("automatic_snooker_scoring_web_app.md", projectRoot), "utf8"),
     readFile(new URL("README.md", projectRoot), "utf8"),
+    readFile(new URL("package.json", projectRoot), "utf8"),
   ]);
 
   assert.match(setup, /"Privacy", "Players", "Profiles", "Camera", "Match"/);
@@ -89,7 +91,15 @@ test("includes consent-gated face and required clothing enrollment in milestone 
   assert.match(camera, /captureVisualProfile/);
   assert.match(visualProfile, /context\.drawImage\(/);
   assert.match(visualProfile, /kind === "clothing" \? sampleSwatches/);
+  assert.match(playerTracking, /MULTIPOSE_LIGHTNING/);
+  assert.match(playerTracking, /enableTracking: true/);
+  assert.match(playerTracking, /maxTracks: 2/);
+  assert.match(playerTracking, /maxPoses: 2/);
+  assert.match(setup, /playerTracksAreLinked/);
+  assert.match(setup, /Live track.*linked/);
+  assert.match(packageJson, /@tensorflow-models\/pose-detection/);
   assert.match(brief, /guided face enrollment for players who opt in/);
+  assert.match(brief, /MoveNet MultiPose tracker/);
   assert.match(readme, /guided face\/clothing enrollment/);
   assert.doesNotMatch(setup, /Face capture arrives in a later milestone/);
 });

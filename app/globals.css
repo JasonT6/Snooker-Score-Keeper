@@ -127,6 +127,7 @@ summary:focus-visible {
 
 .network-chip,
 .local-chip,
+.tracking-pill,
 .orientation-pill,
 .status-pill {
   display: inline-flex;
@@ -145,12 +146,27 @@ summary:focus-visible {
 }
 
 .network-dot,
-.status-dot {
+.status-dot,
+.tracking-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--green);
   box-shadow: 0 0 0 4px rgba(112, 226, 160, 0.1);
+}
+
+.tracking-pill[data-status="loading"] .tracking-dot {
+  background: var(--gold);
+  animation: pulse 1.2s infinite;
+}
+
+.tracking-pill[data-status="error"] .tracking-dot {
+  background: var(--coral);
+}
+
+.tracking-pill[data-status="idle"] .tracking-dot {
+  background: var(--faint);
+  box-shadow: none;
 }
 
 .network-chip[data-online="false"] .network-dot {
@@ -898,6 +914,20 @@ h2 {
   line-height: 1.5;
 }
 
+.camera-error span {
+  display: block;
+}
+
+.inline-retry {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--lime);
+  font-size: 11px;
+  font-weight: 760;
+}
+
 .profile-layout {
   display: grid;
   gap: 22px;
@@ -1001,6 +1031,20 @@ h2 {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 9px;
+}
+
+.tracker-binding {
+  display: block;
+  margin: -3px 0 6px 23px;
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tracker-binding[data-ready="true"] {
+  color: var(--green);
 }
 
 .profile-count {
@@ -1122,6 +1166,50 @@ h2 {
   color: var(--faint);
   font-size: 10px;
   line-height: 1.45;
+}
+
+.tracker-strip {
+  position: absolute;
+  z-index: 4;
+  right: 14px;
+  bottom: 14px;
+  left: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(5, 13, 9, 0.84);
+  backdrop-filter: blur(12px);
+}
+
+.tracker-strip-label {
+  margin: 0 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tracked-person-chip {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 27px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(112, 226, 160, 0.09);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.tracked-person-chip .tracking-dot {
+  width: 6px;
+  height: 6px;
 }
 
 .device-field {

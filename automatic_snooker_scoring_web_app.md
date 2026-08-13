@@ -16,6 +16,7 @@ This is a vision-assisted referee and scorer. Design it so that the system is ho
    - Obtain explicit consent before processing face data.
    - Capture a face embedding locally only if consent is given.
    - Also learn a visual appearance profile from clothing, body shape, and colours, so face matching is not required during play.
+   - Run MoveNet MultiPose Lightning locally with tracking enabled. While each player stands alone in the capture guide, bind the model's persistent pose tracking ID to Player 1 or Player 2 for the continuous camera session.
    - Let the user enter or confirm each player's name.
 4. The user places the phone on a tripod beside or beyond the table and points its camera toward the table from an oblique angle. The setup screen guides them to frame the entire table, all six pockets, and a useful amount of space around the table where players stand; it must not assume an overhead or top-down physical camera position.
 5. Automatically detect the table boundary, pockets, rails, balls, camera orientation, and table perspective. Rectify the camera view into a normalized top-down table coordinate system.
@@ -67,8 +68,11 @@ Use a hybrid on-device / server-capable architecture. Start with browser APIs an
 
 ### Player attribution
 
+- Use `@tensorflow-models/pose-detection` with MoveNet MultiPose Lightning, WebGL acceleration, tracking enabled, and a maximum of two active tracks. Preserve the returned pose IDs while the camera stream remains continuous.
+- During clothing enrollment, associate the person centred in the guide with the selected player. Reject an enrollment if the same live pose ID is already linked to the other player.
 - Detect people around the table and establish the active player from proximity, pose, cue alignment, and shot timing.
 - Match each person to the two setup profiles using clothing/body appearance, with face matching only where the user consented.
+- Treat MoveNet pose IDs as session-scoped tracking identifiers, not permanent identities. If an ID is lost after a long occlusion, camera restart, or a player leaving the frame, rebind it using the enrolled appearance profile before attributing a shot.
 - Do not send biometric data off-device by default. Provide clear retention and deletion controls.
 - If the active player cannot be determined confidently, mark the shot as attribution-uncertain in the audit data rather than confidently assigning the wrong player.
 
@@ -107,12 +111,12 @@ Persist a match as an append-only event log plus derived state. Include a correc
 
 Build in phases, keeping the app runnable after each phase:
 
-1. Mobile PWA shell, camera preview, orientation handling, setup UI, explicit per-player face consent, guided face enrollment for players who opt in, and required clothing/appearance enrollment for both players. Derive and retain compact profiles locally without persisting the raw capture frames.
+1. Mobile PWA shell, camera preview, orientation handling, setup UI, explicit per-player face consent, guided face enrollment for players who opt in, and required clothing/appearance enrollment for both players. Derive and retain compact profiles locally without persisting the raw capture frames. Run an on-device MoveNet MultiPose tracker, bind its two session-scoped pose IDs to Player 1 and Player 2 during enrollment, and show tracker health and assignments during table framing.
 2. Table/pocket calibration from the angled tripod footage and a perspective-rectified, normalized top-down overlay.
 3. Ball detection/tracking with a simulated or recorded-video adapter for deterministic development.
 4. Complete rules engine with exhaustive unit tests for regular scoring, fouls, free balls, clearance, and re-spotted black.
 5. Shot event extraction and automatic score updates from detected events.
-6. Active-player inference using the Milestone 1 profiles, ongoing profile/consent management, privacy controls, and event history.
+6. Active-player inference using the Milestone 1 pose tracks and profiles, appearance-based re-identification after track loss, ongoing profile/consent management, privacy controls, and event history.
 7. Reliability work: confidence thresholds, movement/lost-calibration detection, recovery paths, replay/audit data, accessibility, and field testing.
 
 ## Testing and acceptance criteria

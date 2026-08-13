@@ -49,6 +49,7 @@ export function useCamera() {
   const [devices, setDevices] = useState<CameraDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
 
@@ -61,6 +62,7 @@ export function useCamera() {
 
   const attachVideo = useCallback((element: HTMLVideoElement | null) => {
     videoElementRef.current = element;
+    setVideoElement(element);
     if (!element || !streamRef.current) return;
 
     element.srcObject = streamRef.current;
@@ -142,6 +144,7 @@ export function useCamera() {
     devices,
     selectedDeviceId,
     errorMessage,
+    videoElement,
     videoRef: attachVideo,
     startCamera,
     stopCamera,
