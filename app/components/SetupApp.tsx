@@ -4,10 +4,15 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useCamera, type CameraStatus } from "../hooks/useCamera";
 import { useDeviceOrientation } from "../hooks/useDeviceOrientation";
 import {
+  preferLandscapeOrientation,
+  releaseOrientationLock,
+} from "../lib/orientation";
+import {
   usePlayerTracking,
   type TrackedPerson,
 } from "../hooks/usePlayerTracking";
 import { usePlayerRecognition } from "../hooks/usePlayerRecognition";
+import { PlayerDebugOverlay } from "./PlayerDebugOverlay";
 import { ServiceWorkerRegistration } from "./ServiceWorkerRegistration";
 
 const SETUP_STORAGE_KEY = "cuesight.setup.v1";
@@ -89,6 +94,7 @@ export function SetupApp() {
   const [draft, setDraft] = useState<SetupDraft>(DEFAULT_DRAFT);
   const [activeProfilePlayer, setActiveProfilePlayer] = useState<0 | 1>(0);
   const [profileMessage, setProfileMessage] = useState("");
+  const [debugViewEnabled, setDebugViewEnabled] = useState(false);
   const [online, setOnline] = useState(true);
   const orientation = useDeviceOrientation();
   const {
@@ -104,6 +110,7 @@ export function SetupApp() {
   } = useCamera();
   const cameraVerified = cameraStatus === "streaming";
   const trackingEnabled = cameraVerified && step >= 2 && step <= 4;
+  const cameraScreenActive = step >= 2 && step <= 4;
   const {
     status: playerTrackingStatus,
     people: trackedPeople,
@@ -135,6 +142,8 @@ export function SetupApp() {
       window.removeEventListener("offline", syncConnection);
     };
   }, []);
+
+  useEffect(() => () => releaseOrientationLock(), []);
 
   const namesAreValid = useMemo(
     () => draft.players.every((player) => player.name.trim().length > 0),
@@ -194,6 +203,7 @@ export function SetupApp() {
     resetAssignments();
     resetTracker();
     stopCamera();
+    releaseOrientationLock();
   };
 
   const startCameraAndResetTracking = (deviceId?: string) => {
@@ -201,6 +211,7 @@ export function SetupApp() {
       resetAssignments();
       resetTracker();
     }
+    void preferLandscapeOrientation();
     return startCamera(deviceId);
   };
 
@@ -211,7 +222,11 @@ export function SetupApp() {
   };
 
   return (
-    <div className="app" data-orientation={orientation.mode}>
+    <div
+      className="app"
+      data-camera-screen={cameraScreenActive}
+      data-orientation={orientation.mode}
+    >
       <ServiceWorkerRegistration />
       <header className="topbar">
         <div className="wordmark" aria-label="CueSight">
@@ -222,6 +237,12 @@ export function SetupApp() {
           <span className="network-dot" aria-hidden="true" />
           <span className="network-copy">{online ? "Online" : "Offline ready"}</span>
         </div>
+        {cameraScreenActive && orientation.mode === "portrait" && (
+          <span className="landscape-hint" role="status">
+            <span className="orientation-icon" aria-hidden="true" />
+            Rotate for the primary camera layout
+          </span>
+        )}
       </header>
 
       <main className="shell">
@@ -683,6 +704,17 @@ export function SetupApp() {
                     {orientation.mode === "portrait" ? "Portrait" : "Landscape"}
                     {orientation.angle ? ` · ${orientation.angle}°` : ""}
                   </span>
+                  {cameraStatus === "streaming" && profilesAreReady && (
+                    <button
+                      className="debug-toggle"
+                      data-active={debugViewEnabled}
+                      type="button"
+                      aria-pressed={debugViewEnabled}
+                      onClick={() => setDebugViewEnabled((current) => !current)}
+                    >
+                      {debugViewEnabled ? "Hide debug" : "Debug view"}
+                    </button>
+                  )}
                 </div>
 
                 {cameraStatus === "streaming" && (
@@ -694,6 +726,19 @@ export function SetupApp() {
                       Keep the table, six pockets, and player space inside the view
                     </span>
                   </div>
+                )}
+
+                {cameraStatus === "streaming" && debugViewEnabled && (
+                  <PlayerDebugOverlay
+                    videoElement={videoElement}
+                    people={trackedPeople}
+                    playerNames={[
+                      draft.players[0].name.trim(),
+                      draft.players[1].name.trim(),
+                    ]}
+                    playerTrackIds={playerTrackIds}
+                    memories={playerMemories}
+                  />
                 )}
 
                 {cameraStatus === "streaming" && (
@@ -831,8 +876,11 @@ export function SetupApp() {
         )}
 
         {step === 4 && (
-          <section className="screen-card" aria-labelledby="match-title">
-            <div className="screen-content">
+          <section
+            className="screen-card camera-screen review-camera-screen"
+            aria-labelledby="match-title"
+          >
+            <div className="screen-content review-content">
               <p className="eyebrow">Step 5 · Match details</p>
               <h2 id="match-title">One last look.</h2>
               <p className="lede">

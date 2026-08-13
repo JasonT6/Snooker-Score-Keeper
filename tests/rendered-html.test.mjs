@@ -46,7 +46,7 @@ test("ships the installable PWA assets", async () => {
 
   assert.equal(manifest.short_name, "CueSight");
   assert.equal(manifest.display, "standalone");
-  assert.equal(manifest.orientation, "any");
+  assert.equal(manifest.orientation, "landscape-primary");
   assert.equal(manifest.icons.length, 2);
   assert.match(serviceWorker, /cuesight-shell-v1/);
   assert.match(serviceWorker, /request\.mode === "navigate"/);
@@ -70,11 +70,14 @@ test("keeps camera and orientation concerns isolated", async () => {
   assert.match(orientationHook, /orientationchange/);
   assert.match(orientationHook, /screen\.orientation/);
   assert.match(orientationLogic, /width > height \? "landscape" : "portrait"/);
+  assert.match(orientationLogic, /orientation\.lock\("landscape-primary"\)/);
 });
 
 test("keeps consented player memory across temporary pose-track loss", async () => {
-  const [setup, camera, playerTracking, playerRecognition, brief, readme, packageJson] = await Promise.all([
+  const [setup, debugOverlay, styles, camera, playerTracking, playerRecognition, brief, readme, packageJson] = await Promise.all([
     readFile(new URL("app/components/SetupApp.tsx", projectRoot), "utf8"),
+    readFile(new URL("app/components/PlayerDebugOverlay.tsx", projectRoot), "utf8"),
+    readFile(new URL("app/globals.css", projectRoot), "utf8"),
     readFile(new URL("app/hooks/useCamera.ts", projectRoot), "utf8"),
     readFile(new URL("app/hooks/usePlayerTracking.ts", projectRoot), "utf8"),
     readFile(new URL("app/hooks/usePlayerRecognition.ts", projectRoot), "utf8"),
@@ -95,13 +98,17 @@ test("keeps consented player memory across temporary pose-track loss", async () 
   assert.match(playerTracking, /enableTracking: true/);
   assert.match(playerTracking, /maxTracks: 2/);
   assert.match(playerTracking, /maxPoses: 2/);
+  assert.match(playerTracking, /multiPoseMaxDimension: 384/);
   assert.match(playerRecognition, /@vladmandic\/human/);
   assert.match(playerRecognition, /MATCH_THRESHOLD/);
   assert.match(playerRecognition, /MATCH_MARGIN/);
+  assert.match(playerRecognition, /STRONG_MATCH_THRESHOLD/);
+  assert.match(playerRecognition, /RECOGNITION_INTERVAL_MS = 350/);
   assert.match(playerRecognition, /CONFIRMATION_COUNT = 2/);
   assert.match(playerRecognition, /HANDOFF_WINDOW_MS = 5_000/);
   assert.match(playerRecognition, /handoffTrackAssignments/);
-  assert.match(playerRecognition, /minSize: 32/);
+  assert.match(playerRecognition, /minSize: 18/);
+  assert.match(playerRecognition, /mesh: \{ enabled: false \}/);
   assert.match(playerRecognition, /cropTrackedPersonHead/);
   assert.match(playerRecognition, /FACE_CROP_SIZE = 320/);
   assert.match(playerRecognition, /ENROLLMENT_SAMPLE_COUNT = 2/);
@@ -112,6 +119,8 @@ test("keeps consented player memory across temporary pose-track loss", async () 
   assert.match(playerRecognition, /human\.detect\(videoElement\)/);
   assert.match(playerRecognition, /trackForFace/);
   assert.match(playerRecognition, /pendingFaceMatchesRef/);
+  assert.match(playerRecognition, /missingReleaseTimerRef/);
+  assert.match(playerRecognition, /playersNeedingIdentity/);
   assert.match(playerRecognition, /bindTrack\(candidate\.playerIndex, candidate\.trackId\)/);
   assert.match(playerRecognition, /faceThumbnail\(videoElement, selectedFace\)/);
   assert.doesNotMatch(playerRecognition, /localStorage|indexedDB/);
@@ -121,6 +130,16 @@ test("keeps consented player memory across temporary pose-track loss", async () 
   assert.match(setup, /Re-identifying/);
   assert.match(setup, /Face seen—look straight at camera/);
   assert.match(setup, /Face matched—waiting for body track/);
+  assert.match(setup, /Debug view/);
+  assert.match(setup, /data-camera-screen/);
+  assert.match(debugOverlay, /object-fit: cover/);
+  assert.match(debugOverlay, /descriptor: saved/);
+  assert.match(debugOverlay, /track \$\{person\.trackId\}/);
+  assert.match(styles, /\.app\[data-camera-screen="true"\]/);
+  assert.match(styles, /height: 100dvh/);
+  assert.match(styles, /\.player-debug-overlay/);
+  assert.match(styles, /orientation: landscape/);
+  assert.match(styles, /orientation: portrait/);
   assert.match(playerTracking, /maxAge: 10_000/);
   assert.match(packageJson, /@tensorflow-models\/pose-detection/);
   assert.match(packageJson, /@vladmandic\/human/);

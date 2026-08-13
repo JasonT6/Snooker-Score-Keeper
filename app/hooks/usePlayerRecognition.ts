@@ -25,9 +25,10 @@ type PlayerMemories = [PlayerFaceMemory | null, PlayerFaceMemory | null];
 type PlayerTrackIds = [number | null, number | null];
 type PlayerAnchors = [TrackedPerson | null, TrackedPerson | null];
 
-const RECOGNITION_INTERVAL_MS = 750;
-const MATCH_THRESHOLD = 0.5;
-const MATCH_MARGIN = 0.03;
+const RECOGNITION_INTERVAL_MS = 350;
+const MATCH_THRESHOLD = 0.46;
+const STRONG_MATCH_THRESHOLD = 0.58;
+const MATCH_MARGIN = 0.025;
 const CONFIRMATION_COUNT = 2;
 const HANDOFF_WINDOW_MS = 5_000;
 const HANDOFF_MAX_DISTANCE = 1.5;
@@ -145,18 +146,21 @@ export function handoffTrackAssignments(
 function cropTrackedPersonHead(video: HTMLVideoElement, person: TrackedPerson) {
   const personX = person.centerX - person.width / 2;
   const personY = person.centerY - person.height / 2;
-  const sourceWidth = Math.min(video.videoWidth, person.width * 1.15);
+  // MoveNet's full-body box gives us a reliable way to enlarge a distant face
+  // before BlazeFace sees it. Keep this crop tight enough that a face across a
+  // snooker table still occupies a useful portion of the detector input.
+  const sourceWidth = Math.min(video.videoWidth, person.width * 0.9);
   const sourceHeight = Math.min(
     video.videoHeight,
-    Math.max(person.height * 0.42, sourceWidth * 1.15),
+    Math.max(person.height * 0.34, sourceWidth * 1.12),
   );
   const sourceX = Math.max(
     0,
-    Math.min(video.videoWidth - sourceWidth, personX - person.width * 0.075),
+    Math.min(video.videoWidth - sourceWidth, personX + person.width * 0.05),
   );
   const sourceY = Math.max(
     0,
-    Math.min(video.videoHeight - sourceHeight, personY - person.height * 0.035),
+    Math.min(video.videoHeight - sourceHeight, personY - person.height * 0.08),
   );
   if (sourceWidth < 20 || sourceHeight < 20) return null;
 
@@ -233,6 +237,7 @@ export function usePlayerRecognition(
   const processingRef = useRef(false);
   const votesRef = useRef(new Map<string, number>());
   const missingSinceRef = useRef<[number | null, number | null]>([null, null]);
+  const missingReleaseTimerRef = useRef<number | null>(null);
   const pendingFaceMatchesRef = useRef<[number, number]>([0, 0]);
   const loadGenerationRef = useRef(0);
   const [status, setStatus] = useState<PlayerRecognitionStatus>("idle");
@@ -244,24 +249,27 @@ export function usePlayerRecognition(
 
   useEffect(() => {
     peopleRef.current = people;
-    const currentAssignments = assignmentsRef.current;
+    let nextAssignments: PlayerTrackIds = [...assignmentsRef.current];
+    let nextReleaseDelay = Number.POSITIVE_INFINITY;
+    const now = Date.now();
+
     for (const playerIndex of [0, 1] as const) {
       const assignedPerson = people.find(
-        (person) => person.trackId === currentAssignments[playerIndex],
+        (person) => person.trackId === nextAssignments[playerIndex],
       );
       if (assignedPerson) {
         identityAnchorsRef.current[playerIndex] = assignedPerson;
         missingSinceRef.current[playerIndex] = null;
-      } else if (typeof currentAssignments[playerIndex] === "number") {
-        missingSinceRef.current[playerIndex] ??= Date.now();
-        if (
-          Date.now() - (missingSinceRef.current[playerIndex] ?? Date.now()) >=
-          LOST_TRACK_RELEASE_MS
-        ) {
-          const nextAssignments: PlayerTrackIds = [...assignmentsRef.current];
+      } else if (typeof nextAssignments[playerIndex] === "number") {
+        missingSinceRef.current[playerIndex] ??= now;
+        const remaining =
+          LOST_TRACK_RELEASE_MS -
+          (now - (missingSinceRef.current[playerIndex] ?? now));
+        if (remaining <= 0) {
           nextAssignments[playerIndex] = null;
-          assignmentsRef.current = nextAssignments;
-          setPlayerTrackIds(nextAssignments);
+          missingSinceRef.current[playerIndex] = null;
+        } else {
+          nextReleaseDelay = Math.min(nextReleaseDelay, remaining);
         }
       }
     }
@@ -270,17 +278,59 @@ export function usePlayerRecognition(
       const handedOff = handoffTrackAssignments(
         identityAnchorsRef.current,
         people,
-        currentAssignments,
+        nextAssignments,
       );
-      if (
-        handedOff[0] !== currentAssignments[0] ||
-        handedOff[1] !== currentAssignments[1]
-      ) {
-        assignmentsRef.current = handedOff;
-        setPlayerTrackIds(handedOff);
-      }
+      nextAssignments = handedOff;
     }
-  }, [people]);
+
+    if (
+      nextAssignments[0] !== assignmentsRef.current[0] ||
+      nextAssignments[1] !== assignmentsRef.current[1]
+    ) {
+      assignmentsRef.current = nextAssignments;
+      setPlayerTrackIds(nextAssignments);
+    }
+
+    if (missingReleaseTimerRef.current !== null) {
+      window.clearTimeout(missingReleaseTimerRef.current);
+      missingReleaseTimerRef.current = null;
+    }
+    if (Number.isFinite(nextReleaseDelay)) {
+      missingReleaseTimerRef.current = window.setTimeout(() => {
+        missingReleaseTimerRef.current = null;
+        const visibleTrackIds = new Set(
+          peopleRef.current.map((person) => person.trackId),
+        );
+        const released: PlayerTrackIds = [...assignmentsRef.current];
+        let changed = false;
+        for (const playerIndex of [0, 1] as const) {
+          const trackId = released[playerIndex];
+          const missingSince = missingSinceRef.current[playerIndex];
+          if (
+            typeof trackId === "number" &&
+            !visibleTrackIds.has(trackId) &&
+            missingSince !== null &&
+            Date.now() - missingSince >= LOST_TRACK_RELEASE_MS
+          ) {
+            released[playerIndex] = null;
+            missingSinceRef.current[playerIndex] = null;
+            changed = true;
+          }
+        }
+        if (changed) {
+          assignmentsRef.current = released;
+          setPlayerTrackIds(released);
+        }
+      }, Math.max(0, nextReleaseDelay + 20));
+    }
+
+    return () => {
+      if (missingReleaseTimerRef.current !== null) {
+        window.clearTimeout(missingReleaseTimerRef.current);
+        missingReleaseTimerRef.current = null;
+      }
+    };
+  }, [people, playerTrackIds]);
 
   useEffect(() => {
     if (!videoElement) {
@@ -331,16 +381,18 @@ export function usePlayerRecognition(
             detector: {
               enabled: true,
               maxDetected: 2,
-              minConfidence: 0.5,
-              minSize: 32,
+              minConfidence: 0.35,
+              minSize: 18,
               skipFrames: 0,
               skipTime: 0,
             },
-            mesh: { enabled: true },
+            // FaceRes can consume the detector crop directly; skipping the much
+            // heavier 468-point mesh makes returning-player matching noticeably faster.
+            mesh: { enabled: false },
             iris: { enabled: false },
             description: {
               enabled: true,
-              minConfidence: 0.5,
+              minConfidence: 0.35,
               skipFrames: 0,
               skipTime: 0,
             },
@@ -465,8 +517,13 @@ export function usePlayerRecognition(
   }, []);
 
   const resetAssignments = useCallback(() => {
+    if (missingReleaseTimerRef.current !== null) {
+      window.clearTimeout(missingReleaseTimerRef.current);
+      missingReleaseTimerRef.current = null;
+    }
     assignmentsRef.current = [null, null];
     identityAnchorsRef.current = [null, null];
+    missingSinceRef.current = [null, null];
     pendingFaceMatchesRef.current = [0, 0];
     setPlayerTrackIds([null, null]);
     votesRef.current.clear();
@@ -513,6 +570,15 @@ export function usePlayerRecognition(
           (trackId): trackId is number => typeof trackId === "number",
           ),
         );
+        const visibleTrackIds = new Set(
+          peopleRef.current.map((person) => person.trackId),
+        );
+        const playersNeedingIdentity = new Set(
+          ([0, 1] as const).filter((playerIndex) => {
+            const trackId = assignmentsRef.current[playerIndex];
+            return typeof trackId !== "number" || !visibleTrackIds.has(trackId);
+          }),
+        );
         const tracksToIdentify = peopleRef.current.filter(
           (person) => !assignedTrackIds.has(person.trackId),
         );
@@ -527,33 +593,9 @@ export function usePlayerRecognition(
         let matchedFaceFound = false;
         setReidentificationStatus(tracksToIdentify.length > 0 ? "waiting-for-face" : "idle");
 
-        const fullFrameResult = await human.detect(videoElement);
-        if (cancelled) return;
-        for (const face of fullFrameResult.face) {
-          if (!face.embedding || face.embedding.length < 64) continue;
-          faceFound = true;
-          setReidentificationStatus("comparing");
-          const descriptor = [...face.embedding];
-          const match = matchDescriptorToPlayer(human, descriptor, memoriesRef.current);
-          if (!match.matched) continue;
-          matchedFaceFound = true;
-          const track = trackForFace(face, tracksToIdentify);
-          if (track) {
-            candidates.push({
-              descriptor,
-              playerIndex: match.playerIndex,
-              similarity: match.similarity,
-              trackId: track.trackId,
-            });
-          } else {
-            pendingFaceMatchesRef.current[match.playerIndex] =
-              Date.now() + PENDING_FACE_MATCH_MS;
-            setReidentificationStatus("face-matched");
-          }
-        }
-
+        // Start with pose-guided head crops. This is both faster than an extra
+        // full-frame pass and substantially enlarges faces in a wide table view.
         for (const track of tracksToIdentify) {
-          if (candidates.some((candidate) => candidate.trackId === track.trackId)) continue;
           const headCrop = cropTrackedPersonHead(videoElement, track);
           if (!headCrop) continue;
           const result = await human.detect(headCrop);
@@ -566,7 +608,7 @@ export function usePlayerRecognition(
           setReidentificationStatus("comparing");
           const descriptor = [...face.embedding];
           const match = matchDescriptorToPlayer(human, descriptor, memoriesRef.current);
-          if (!match.matched) continue;
+          if (!match.matched || !playersNeedingIdentity.has(match.playerIndex)) continue;
           matchedFaceFound = true;
           candidates.push({
             descriptor,
@@ -574,6 +616,29 @@ export function usePlayerRecognition(
             similarity: match.similarity,
             trackId: track.trackId,
           });
+        }
+
+        // If a face is close enough to see but MoveNet cannot form a body track,
+        // retain the face result briefly and attach it when its body appears.
+        if (tracksToIdentify.length === 0 && playersNeedingIdentity.size > 0) {
+          const fullFrameResult = await human.detect(videoElement);
+          if (cancelled) return;
+          for (const face of fullFrameResult.face) {
+            if (!face.embedding || face.embedding.length < 64) continue;
+            faceFound = true;
+            setReidentificationStatus("comparing");
+            const descriptor = [...face.embedding];
+            const match = matchDescriptorToPlayer(
+              human,
+              descriptor,
+              memoriesRef.current,
+            );
+            if (!match.matched || !playersNeedingIdentity.has(match.playerIndex)) continue;
+            matchedFaceFound = true;
+            pendingFaceMatchesRef.current[match.playerIndex] =
+              Date.now() + PENDING_FACE_MATCH_MS;
+            setReidentificationStatus("face-matched");
+          }
         }
 
         const candidateTrackIds = new Set(candidates.map((candidate) => candidate.trackId));
@@ -609,7 +674,11 @@ export function usePlayerRecognition(
           const votes = (votesRef.current.get(voteKey) ?? 0) + 1;
           votesRef.current.set(voteKey, votes);
           setReidentificationStatus("confirming");
-          if (votes >= CONFIRMATION_COUNT) {
+          const requiredVotes =
+            candidate.similarity >= STRONG_MATCH_THRESHOLD
+              ? 1
+              : CONFIRMATION_COUNT;
+          if (votes >= requiredVotes) {
             bindTrack(candidate.playerIndex, candidate.trackId);
             missingSinceRef.current[candidate.playerIndex] = null;
             setReidentificationStatus("matched");
