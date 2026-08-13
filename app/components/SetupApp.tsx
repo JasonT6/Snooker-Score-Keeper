@@ -115,6 +115,7 @@ export function SetupApp() {
     errorMessage: playerRecognitionError,
     memories: playerMemories,
     playerTrackIds,
+    reidentificationStatus,
     enrollPlayer,
     forgetPlayer,
     resetAssignments,
@@ -177,7 +178,7 @@ export function SetupApp() {
         throw new Error("Wait until the player tracker finds the person in the guide.");
       }
 
-      await enrollPlayer(activeProfilePlayer, centredTrackedPerson.trackId);
+      await enrollPlayer(activeProfilePlayer, centredTrackedPerson);
       setProfileMessage(
         `${draft.players[activeProfilePlayer].name.trim()} is remembered and linked to track ` +
           `${centredTrackedPerson.trackId}. They can leave and be recognized when they return.`,
@@ -883,7 +884,15 @@ export function SetupApp() {
                       <dt>Live identity</dt>
                       <dd>
                         {trackedPeople.length > visiblePlayerCount
-                          ? `Re-identifying · ${visiblePlayerCount}/2 matched`
+                          ? reidentificationStatus === "waiting-for-face"
+                            ? `Look toward camera · ${visiblePlayerCount}/2 matched`
+                            : reidentificationStatus === "comparing"
+                              ? `Comparing saved faces · ${visiblePlayerCount}/2 matched`
+                              : reidentificationStatus === "no-match"
+                                ? `Face seen—look straight at camera · ${visiblePlayerCount}/2 matched`
+                              : reidentificationStatus === "confirming"
+                                ? `Confirming face match · ${visiblePlayerCount}/2 matched`
+                                : `Re-identifying · ${visiblePlayerCount}/2 matched`
                           : `${visiblePlayerCount}/2 recognized in the current view`}
                       </dd>
                     </div>

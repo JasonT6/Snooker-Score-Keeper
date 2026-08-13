@@ -2,10 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type Human from "@vladmandic/human";
-import type { FaceResult } from "@vladmandic/human";
 import type { TrackedPerson } from "./usePlayerTracking";
 
 export type PlayerRecognitionStatus = "idle" | "loading" | "ready" | "error";
+export type ReidentificationStatus =
+  | "idle"
+  | "waiting-for-face"
+  | "comparing"
+  | "no-match"
+  | "confirming"
+  | "matched";
 
 export interface PlayerFaceMemory {
   capturedAt: number;
@@ -18,14 +24,15 @@ type PlayerTrackIds = [number | null, number | null];
 type PlayerAnchors = [TrackedPerson | null, TrackedPerson | null];
 
 const RECOGNITION_INTERVAL_MS = 750;
-const MATCH_THRESHOLD = 0.55;
-const MATCH_MARGIN = 0.08;
+const MATCH_THRESHOLD = 0.5;
+const MATCH_MARGIN = 0.03;
 const CONFIRMATION_COUNT = 2;
 const HANDOFF_WINDOW_MS = 5_000;
 const HANDOFF_MAX_DISTANCE = 1.5;
 const ENROLLMENT_SAMPLE_COUNT = 2;
 const MAX_DESCRIPTOR_GALLERY_SIZE = 5;
 const FACE_CROP_SIZE = 320;
+const LOST_TRACK_RELEASE_MS = 10_000;
 
 function trackDistance(previous: TrackedPerson, current: TrackedPerson) {
   const width = Math.max(previous.width, current.width, 1);
@@ -68,31 +75,6 @@ export function handoffTrackAssignments(
   }
 
   return next;
-}
-
-function faceThumbnail(video: HTMLVideoElement, face: FaceResult) {
-  const [faceX, faceY, faceWidth, faceHeight] = face.box;
-  const side = Math.max(faceWidth, faceHeight) * 1.55;
-  const sourceX = Math.max(0, Math.min(video.videoWidth - side, faceX + faceWidth / 2 - side / 2));
-  const sourceY = Math.max(0, Math.min(video.videoHeight - side, faceY + faceHeight / 2 - side / 2));
-  const sourceSide = Math.min(side, video.videoWidth - sourceX, video.videoHeight - sourceY);
-  const canvas = document.createElement("canvas");
-  canvas.width = 160;
-  canvas.height = 160;
-  const context = canvas.getContext("2d");
-  if (!context) return "";
-  context.drawImage(
-    video,
-    sourceX,
-    sourceY,
-    sourceSide,
-    sourceSide,
-    0,
-    0,
-    canvas.width,
-    canvas.height,
-  );
-  return canvas.toDataURL("image/jpeg", 0.82);
 }
 
 function cropTrackedPersonHead(video: HTMLVideoElement, person: TrackedPerson) {
@@ -151,6 +133,26 @@ function bestMemorySimilarity(
   );
 }
 
+export function matchDescriptorToPlayer(
+  human: Human,
+  descriptor: number[],
+  memories: PlayerMemories,
+) {
+  const similarities = memories.map((memory) =>
+    bestMemorySimilarity(human, descriptor, memory),
+  ) as [number, number];
+  const playerIndex: 0 | 1 = similarities[0] >= similarities[1] ? 0 : 1;
+  const otherPlayer = playerIndex === 0 ? 1 : 0;
+  return {
+    playerIndex,
+    similarity: similarities[playerIndex],
+    margin: similarities[playerIndex] - similarities[otherPlayer],
+    matched:
+      similarities[playerIndex] >= MATCH_THRESHOLD &&
+      similarities[playerIndex] - similarities[otherPlayer] >= MATCH_MARGIN,
+  };
+}
+
 export function usePlayerRecognition(
   videoElement: HTMLVideoElement | null,
   people: TrackedPerson[],
@@ -165,11 +167,14 @@ export function usePlayerRecognition(
   const handoffUntilRef = useRef(0);
   const processingRef = useRef(false);
   const votesRef = useRef(new Map<string, number>());
+  const missingSinceRef = useRef<[number | null, number | null]>([null, null]);
   const loadGenerationRef = useRef(0);
   const [status, setStatus] = useState<PlayerRecognitionStatus>("idle");
   const [errorMessage, setErrorMessage] = useState("");
   const [memories, setMemories] = useState<PlayerMemories>([null, null]);
   const [playerTrackIds, setPlayerTrackIds] = useState<PlayerTrackIds>([null, null]);
+  const [reidentificationStatus, setReidentificationStatus] =
+    useState<ReidentificationStatus>("idle");
 
   useEffect(() => {
     peopleRef.current = people;
@@ -178,7 +183,21 @@ export function usePlayerRecognition(
       const assignedPerson = people.find(
         (person) => person.trackId === currentAssignments[playerIndex],
       );
-      if (assignedPerson) identityAnchorsRef.current[playerIndex] = assignedPerson;
+      if (assignedPerson) {
+        identityAnchorsRef.current[playerIndex] = assignedPerson;
+        missingSinceRef.current[playerIndex] = null;
+      } else if (typeof currentAssignments[playerIndex] === "number") {
+        missingSinceRef.current[playerIndex] ??= Date.now();
+        if (
+          Date.now() - (missingSinceRef.current[playerIndex] ?? Date.now()) >=
+          LOST_TRACK_RELEASE_MS
+        ) {
+          const nextAssignments: PlayerTrackIds = [...assignmentsRef.current];
+          nextAssignments[playerIndex] = null;
+          assignmentsRef.current = nextAssignments;
+          setPlayerTrackIds(nextAssignments);
+        }
+      }
     }
 
     if (Date.now() <= handoffUntilRef.current) {
@@ -293,7 +312,7 @@ export function usePlayerRecognition(
   }, [enabled]);
 
   const enrollPlayer = useCallback(
-    async (playerIndex: 0 | 1, trackId: number) => {
+    async (playerIndex: 0 | 1, person: TrackedPerson) => {
       const human = humanRef.current;
       if (!human || status !== "ready") {
         throw new Error("Wait until the face-memory model is ready.");
@@ -307,10 +326,15 @@ export function usePlayerRecognition(
 
       processingRef.current = true;
       try {
+        const headCrop = cropTrackedPersonHead(videoElement, person);
+        if (!headCrop) {
+          throw new Error("Move closer so the selected player's head is clear in the guide.");
+        }
         const descriptors: number[][] = [];
         let thumbnail = "";
         for (let sampleIndex = 0; sampleIndex < ENROLLMENT_SAMPLE_COUNT; sampleIndex += 1) {
-          const result = await human.detect(videoElement);
+          const refreshedHeadCrop = cropTrackedPersonHead(videoElement, person) ?? headCrop;
+          const result = await human.detect(refreshedHeadCrop);
           const usableFaces = result.face.filter(
             (face) => face.embedding && face.embedding.length >= 64 && face.size[0] >= 64,
           );
@@ -323,7 +347,7 @@ export function usePlayerRecognition(
           }
           const face = usableFaces[0];
           descriptors.push([...(face.embedding ?? [])]);
-          if (!thumbnail) thumbnail = faceThumbnail(videoElement, face);
+          if (!thumbnail) thumbnail = refreshedHeadCrop.toDataURL("image/jpeg", 0.82);
           if (sampleIndex + 1 < ENROLLMENT_SAMPLE_COUNT) {
             await new Promise((resolve) => window.setTimeout(resolve, 180));
           }
@@ -351,7 +375,7 @@ export function usePlayerRecognition(
         nextMemories[playerIndex] = memory;
         memoriesRef.current = nextMemories;
         setMemories(nextMemories);
-        bindTrack(playerIndex, trackId);
+        bindTrack(playerIndex, person.trackId);
         votesRef.current.clear();
         return memory;
       } finally {
@@ -419,7 +443,7 @@ export function usePlayerRecognition(
       try {
         const assignedTrackIds = new Set(
           assignmentsRef.current.filter(
-            (trackId): trackId is number => typeof trackId === "number",
+          (trackId): trackId is number => typeof trackId === "number",
           ),
         );
         const tracksToIdentify = peopleRef.current.filter(
@@ -432,6 +456,8 @@ export function usePlayerRecognition(
           trackId: number;
         }> = [];
         const seenVoteKeys = new Set<string>();
+        let faceFound = false;
+        setReidentificationStatus(tracksToIdentify.length > 0 ? "waiting-for-face" : "idle");
 
         for (const track of tracksToIdentify) {
           const headCrop = cropTrackedPersonHead(videoElement, track);
@@ -442,24 +468,23 @@ export function usePlayerRecognition(
             .filter((candidate) => candidate.embedding && candidate.embedding.length >= 64)
             .sort((left, right) => right.size[0] * right.size[1] - left.size[0] * left.size[1])[0];
           if (!face?.embedding || face.embedding.length < 64) continue;
+          faceFound = true;
+          setReidentificationStatus("comparing");
           const descriptor = [...face.embedding];
-          const similarities = memoriesRef.current.map((memory) =>
-            bestMemorySimilarity(human, descriptor, memory),
-          );
-          const playerIndex = similarities[0] >= similarities[1] ? 0 : 1;
-          const otherPlayer = playerIndex === 0 ? 1 : 0;
-          if (
-            similarities[playerIndex] < MATCH_THRESHOLD ||
-            similarities[playerIndex] - similarities[otherPlayer] < MATCH_MARGIN
-          ) {
-            continue;
-          }
+          const match = matchDescriptorToPlayer(human, descriptor, memoriesRef.current);
+          if (!match.matched) continue;
           candidates.push({
             descriptor,
-            playerIndex: playerIndex as 0 | 1,
-            similarity: similarities[playerIndex],
+            playerIndex: match.playerIndex,
+            similarity: match.similarity,
             trackId: track.trackId,
           });
+        }
+
+        if (tracksToIdentify.length > 0 && !faceFound) {
+          setReidentificationStatus("waiting-for-face");
+        } else if (faceFound && candidates.length === 0) {
+          setReidentificationStatus("no-match");
         }
 
         const claimedPlayers = new Set<number>();
@@ -472,8 +497,11 @@ export function usePlayerRecognition(
           seenVoteKeys.add(voteKey);
           const votes = (votesRef.current.get(voteKey) ?? 0) + 1;
           votesRef.current.set(voteKey, votes);
+          setReidentificationStatus("confirming");
           if (votes >= CONFIRMATION_COUNT) {
             bindTrack(candidate.playerIndex, candidate.trackId);
+            missingSinceRef.current[candidate.playerIndex] = null;
+            setReidentificationStatus("matched");
             const memory = memoriesRef.current[candidate.playerIndex];
             if (memory && memory.descriptors.length < MAX_DESCRIPTOR_GALLERY_SIZE) {
               memory.descriptors.push(candidate.descriptor);
@@ -510,6 +538,7 @@ export function usePlayerRecognition(
     errorMessage: enabled ? errorMessage : "",
     memories,
     playerTrackIds,
+    reidentificationStatus,
     enrollPlayer,
     forgetPlayer,
     resetAssignments,
