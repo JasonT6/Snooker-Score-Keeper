@@ -881,7 +881,11 @@ export function SetupApp() {
                     </div>
                     <div className="summary-row">
                       <dt>Live identity</dt>
-                      <dd>{visiblePlayerCount}/2 recognized in the current view</dd>
+                      <dd>
+                        {trackedPeople.length > visiblePlayerCount
+                          ? `Re-identifying · ${visiblePlayerCount}/2 matched`
+                          : `${visiblePlayerCount}/2 recognized in the current view`}
+                      </dd>
                     </div>
                   </dl>
 
@@ -915,6 +919,10 @@ export function SetupApp() {
                   They begin in Milestone 2 after this camera setup.
                 </span>
               </div>
+
+              {playerRecognitionError && (
+                <p className="camera-error" role="alert">{playerRecognitionError}</p>
+              )}
 
               <div className="action-bar">
                 <button className="text-button" type="button" onClick={() => setStep(3)}>

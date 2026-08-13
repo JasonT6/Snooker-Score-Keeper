@@ -9,7 +9,7 @@ export type PlayerRecognitionStatus = "idle" | "loading" | "ready" | "error";
 
 export interface PlayerFaceMemory {
   capturedAt: number;
-  descriptor: number[];
+  descriptors: number[][];
   thumbnail: string;
 }
 
@@ -23,6 +23,9 @@ const MATCH_MARGIN = 0.08;
 const CONFIRMATION_COUNT = 2;
 const HANDOFF_WINDOW_MS = 5_000;
 const HANDOFF_MAX_DISTANCE = 1.5;
+const ENROLLMENT_SAMPLE_COUNT = 2;
+const MAX_DESCRIPTOR_GALLERY_SIZE = 5;
+const FACE_CROP_SIZE = 320;
 
 function trackDistance(previous: TrackedPerson, current: TrackedPerson) {
   const width = Math.max(previous.width, current.width, 1);
@@ -92,31 +95,60 @@ function faceThumbnail(video: HTMLVideoElement, face: FaceResult) {
   return canvas.toDataURL("image/jpeg", 0.82);
 }
 
-function trackForFace(face: FaceResult, people: TrackedPerson[]) {
-  const [faceX, faceY, faceWidth, faceHeight] = face.box;
-  const faceCenterX = faceX + faceWidth / 2;
-  const faceCenterY = faceY + faceHeight / 2;
+function cropTrackedPersonHead(video: HTMLVideoElement, person: TrackedPerson) {
+  const personX = person.centerX - person.width / 2;
+  const personY = person.centerY - person.height / 2;
+  const sourceWidth = Math.min(video.videoWidth, person.width * 1.15);
+  const sourceHeight = Math.min(
+    video.videoHeight,
+    Math.max(person.height * 0.42, sourceWidth * 1.15),
+  );
+  const sourceX = Math.max(
+    0,
+    Math.min(video.videoWidth - sourceWidth, personX - person.width * 0.075),
+  );
+  const sourceY = Math.max(
+    0,
+    Math.min(video.videoHeight - sourceHeight, personY - person.height * 0.035),
+  );
+  if (sourceWidth < 20 || sourceHeight < 20) return null;
 
-  return [...people]
-    .filter((person) => {
-      const xMin = person.centerX - person.width / 2;
-      const yMin = person.centerY - person.height / 2;
-      return (
-        faceCenterX >= xMin - person.width * 0.08 &&
-        faceCenterX <= xMin + person.width * 1.08 &&
-        faceCenterY >= yMin - person.height * 0.08 &&
-        faceCenterY <= yMin + person.height * 0.55
-      );
-    })
-    .sort((left, right) => {
-      const leftDistance =
-        Math.abs(left.centerX - faceCenterX) / Math.max(left.width, 1) +
-        Math.abs(left.centerY - faceCenterY) / Math.max(left.height, 1);
-      const rightDistance =
-        Math.abs(right.centerX - faceCenterX) / Math.max(right.width, 1) +
-        Math.abs(right.centerY - faceCenterY) / Math.max(right.height, 1);
-      return leftDistance - rightDistance;
-    })[0] ?? null;
+  const canvas = document.createElement("canvas");
+  canvas.width = FACE_CROP_SIZE;
+  canvas.height = FACE_CROP_SIZE;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.fillStyle = "#000";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  const scale = Math.min(canvas.width / sourceWidth, canvas.height / sourceHeight);
+  const targetWidth = sourceWidth * scale;
+  const targetHeight = sourceHeight * scale;
+  context.drawImage(
+    video,
+    sourceX,
+    sourceY,
+    sourceWidth,
+    sourceHeight,
+    (canvas.width - targetWidth) / 2,
+    (canvas.height - targetHeight) / 2,
+    targetWidth,
+    targetHeight,
+  );
+  return canvas;
+}
+
+function bestMemorySimilarity(
+  human: Human,
+  descriptor: number[],
+  memory: PlayerFaceMemory | null,
+) {
+  if (!memory) return 0;
+  return Math.max(
+    0,
+    ...memory.descriptors.map((reference) =>
+      human.match.similarity(descriptor, reference),
+    ),
+  );
 }
 
 export function usePlayerRecognition(
@@ -275,25 +307,35 @@ export function usePlayerRecognition(
 
       processingRef.current = true;
       try {
-        const result = await human.detect(videoElement);
-        const usableFaces = result.face.filter(
-          (face) => face.embedding && face.embedding.length >= 64 && face.size[0] >= 64,
-        );
-        if (usableFaces.length !== 1) {
-          throw new Error(
-            usableFaces.length === 0
-              ? "No clear face was found. Move closer, face the camera, and try again."
-              : "More than one face is visible. Keep only the selected player in the guide.",
+        const descriptors: number[][] = [];
+        let thumbnail = "";
+        for (let sampleIndex = 0; sampleIndex < ENROLLMENT_SAMPLE_COUNT; sampleIndex += 1) {
+          const result = await human.detect(videoElement);
+          const usableFaces = result.face.filter(
+            (face) => face.embedding && face.embedding.length >= 64 && face.size[0] >= 64,
           );
+          if (usableFaces.length !== 1) {
+            throw new Error(
+              usableFaces.length === 0
+                ? "No clear face was found. Move closer, face the camera, and try again."
+                : "More than one face is visible. Keep only the selected player in the guide.",
+            );
+          }
+          const face = usableFaces[0];
+          descriptors.push([...(face.embedding ?? [])]);
+          if (!thumbnail) thumbnail = faceThumbnail(videoElement, face);
+          if (sampleIndex + 1 < ENROLLMENT_SAMPLE_COUNT) {
+            await new Promise((resolve) => window.setTimeout(resolve, 180));
+          }
         }
 
-        const face = usableFaces[0];
-        const descriptor = [...(face.embedding ?? [])];
         const otherPlayer = playerIndex === 0 ? 1 : 0;
         const otherMemory = memoriesRef.current[otherPlayer];
         if (
           otherMemory &&
-          human.match.similarity(descriptor, otherMemory.descriptor) >= 0.62
+          descriptors.some(
+            (descriptor) => bestMemorySimilarity(human, descriptor, otherMemory) >= 0.62,
+          )
         ) {
           throw new Error(
             "This face is too similar to the other saved player. Make sure the selected player is alone in view.",
@@ -302,8 +344,8 @@ export function usePlayerRecognition(
 
         const memory: PlayerFaceMemory = {
           capturedAt: Date.now(),
-          descriptor,
-          thumbnail: faceThumbnail(videoElement, face),
+          descriptors,
+          thumbnail,
         };
         const nextMemories: PlayerMemories = [...memoriesRef.current];
         nextMemories[playerIndex] = memory;
@@ -354,6 +396,14 @@ export function usePlayerRecognition(
     }
 
     let cancelled = false;
+    let recognitionTimer = 0;
+    const scheduleRecognition = () => {
+      if (cancelled) return;
+      recognitionTimer = window.setTimeout(
+        () => void recognize(),
+        RECOGNITION_INTERVAL_MS,
+      );
+    };
     const recognize = async () => {
       if (
         cancelled ||
@@ -361,22 +411,40 @@ export function usePlayerRecognition(
         videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
         peopleRef.current.length === 0
       ) {
+        scheduleRecognition();
         return;
       }
 
       processingRef.current = true;
       try {
-        const result = await human.detect(videoElement);
-        if (cancelled) return;
+        const assignedTrackIds = new Set(
+          assignmentsRef.current.filter(
+            (trackId): trackId is number => typeof trackId === "number",
+          ),
+        );
+        const tracksToIdentify = peopleRef.current.filter(
+          (person) => !assignedTrackIds.has(person.trackId),
+        );
+        const candidates: Array<{
+          descriptor: number[];
+          playerIndex: 0 | 1;
+          similarity: number;
+          trackId: number;
+        }> = [];
         const seenVoteKeys = new Set<string>();
 
-        for (const face of result.face) {
-          if (!face.embedding || face.embedding.length < 64) continue;
-          const track = trackForFace(face, peopleRef.current);
-          if (!track) continue;
-
+        for (const track of tracksToIdentify) {
+          const headCrop = cropTrackedPersonHead(videoElement, track);
+          if (!headCrop) continue;
+          const result = await human.detect(headCrop);
+          if (cancelled) return;
+          const face = [...result.face]
+            .filter((candidate) => candidate.embedding && candidate.embedding.length >= 64)
+            .sort((left, right) => right.size[0] * right.size[1] - left.size[0] * left.size[1])[0];
+          if (!face?.embedding || face.embedding.length < 64) continue;
+          const descriptor = [...face.embedding];
           const similarities = memoriesRef.current.map((memory) =>
-            memory ? human.match.similarity(face.embedding ?? [], memory.descriptor) : 0,
+            bestMemorySimilarity(human, descriptor, memory),
           );
           const playerIndex = similarities[0] >= similarities[1] ? 0 : 1;
           const otherPlayer = playerIndex === 0 ? 1 : 0;
@@ -386,13 +454,30 @@ export function usePlayerRecognition(
           ) {
             continue;
           }
+          candidates.push({
+            descriptor,
+            playerIndex: playerIndex as 0 | 1,
+            similarity: similarities[playerIndex],
+            trackId: track.trackId,
+          });
+        }
 
-          const voteKey = `${track.trackId}:${playerIndex}`;
+        const claimedPlayers = new Set<number>();
+        for (const candidate of candidates.sort(
+          (left, right) => right.similarity - left.similarity,
+        )) {
+          if (claimedPlayers.has(candidate.playerIndex)) continue;
+          claimedPlayers.add(candidate.playerIndex);
+          const voteKey = `${candidate.trackId}:${candidate.playerIndex}`;
           seenVoteKeys.add(voteKey);
           const votes = (votesRef.current.get(voteKey) ?? 0) + 1;
           votesRef.current.set(voteKey, votes);
           if (votes >= CONFIRMATION_COUNT) {
-            bindTrack(playerIndex as 0 | 1, track.trackId);
+            bindTrack(candidate.playerIndex, candidate.trackId);
+            const memory = memoriesRef.current[candidate.playerIndex];
+            if (memory && memory.descriptors.length < MAX_DESCRIPTOR_GALLERY_SIZE) {
+              memory.descriptors.push(candidate.descriptor);
+            }
           }
         }
 
@@ -409,14 +494,14 @@ export function usePlayerRecognition(
         }
       } finally {
         processingRef.current = false;
+        scheduleRecognition();
       }
     };
 
-    const interval = window.setInterval(() => void recognize(), RECOGNITION_INTERVAL_MS);
     void recognize();
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      window.clearTimeout(recognitionTimer);
     };
   }, [bindTrack, enabled, memories, status, videoElement]);
 
