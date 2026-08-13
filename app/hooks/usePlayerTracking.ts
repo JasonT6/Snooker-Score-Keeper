@@ -23,16 +23,67 @@ export interface TrackedPerson {
 }
 
 const TRACKING_INTERVAL_MS = 100;
+const MULTIPOSE_MAX_DIMENSION = 256;
+const MULTIPOSE_DIMENSION_DIVISOR = 32;
 
-function toTrackedPerson(pose: Pose): TrackedPerson | null {
+export function normalizedPoseBoxToPixels(
+  box: NonNullable<Pose["box"]>,
+  frameWidth: number,
+  frameHeight: number,
+) {
+  // MoveNet MultiPose returns its box in the padded model input's normalized
+  // coordinates. The package converts keypoints back to source pixels, but it
+  // leaves pose.box normalized, so convert and remove that padding here.
+  let resizedWidth: number;
+  let resizedHeight: number;
+  if (frameWidth > frameHeight) {
+    resizedWidth = MULTIPOSE_MAX_DIMENSION;
+    resizedHeight = Math.round(
+      (MULTIPOSE_MAX_DIMENSION * frameHeight) / frameWidth,
+    );
+  } else {
+    resizedWidth = Math.round(
+      (MULTIPOSE_MAX_DIMENSION * frameWidth) / frameHeight,
+    );
+    resizedHeight = MULTIPOSE_MAX_DIMENSION;
+  }
+  const paddedWidth =
+    Math.ceil(resizedWidth / MULTIPOSE_DIMENSION_DIVISOR) *
+    MULTIPOSE_DIMENSION_DIVISOR;
+  const paddedHeight =
+    Math.ceil(resizedHeight / MULTIPOSE_DIMENSION_DIVISOR) *
+    MULTIPOSE_DIMENSION_DIVISOR;
+  const scaleX = (frameWidth * paddedWidth) / Math.max(resizedWidth, 1);
+  const scaleY = (frameHeight * paddedHeight) / Math.max(resizedHeight, 1);
+  const xMin = Math.max(0, Math.min(frameWidth, box.xMin * scaleX));
+  const yMin = Math.max(0, Math.min(frameHeight, box.yMin * scaleY));
+  const xMax = Math.max(xMin, Math.min(frameWidth, box.xMax * scaleX));
+  const yMax = Math.max(yMin, Math.min(frameHeight, box.yMax * scaleY));
+  return {
+    centerX: xMin + (xMax - xMin) / 2,
+    centerY: yMin + (yMax - yMin) / 2,
+    width: xMax - xMin,
+    height: yMax - yMin,
+  };
+}
+
+export function toTrackedPerson(
+  pose: Pose,
+  frameWidth: number,
+  frameHeight: number,
+): TrackedPerson | null {
   if (typeof pose.id !== "number" || !pose.box) return null;
+  if (frameWidth <= 0 || frameHeight <= 0) return null;
+  const pixelBox = normalizedPoseBoxToPixels(
+    pose.box,
+    frameWidth,
+    frameHeight,
+  );
+  if (pixelBox.width < 1 || pixelBox.height < 1) return null;
   return {
     trackId: pose.id,
     confidence: pose.score ?? 0,
-    centerX: pose.box.xMin + pose.box.width / 2,
-    centerY: pose.box.yMin + pose.box.height / 2,
-    width: pose.box.width,
-    height: pose.box.height,
+    ...pixelBox,
   };
 }
 
@@ -89,7 +140,7 @@ export function usePlayerTracking(
           enableTracking: true,
           trackerType: trackerTypes.TrackerType.BoundingBox,
           minPoseScore: 0.25,
-          multiPoseMaxDimension: 256,
+          multiPoseMaxDimension: MULTIPOSE_MAX_DIMENSION,
           trackerConfig: {
             maxTracks: 2,
             // Keep IDs alive while React replaces the video element between setup screens.
@@ -162,7 +213,13 @@ export function usePlayerTracking(
         if (cancelled) return;
         setPeople(
           poses
-            .map(toTrackedPerson)
+            .map((pose) =>
+              toTrackedPerson(
+                pose,
+                videoElement.videoWidth,
+                videoElement.videoHeight,
+              ),
+            )
             .filter((person): person is TrackedPerson => Boolean(person))
             .sort((left, right) => right.confidence - left.confidence)
             .slice(0, 2),
