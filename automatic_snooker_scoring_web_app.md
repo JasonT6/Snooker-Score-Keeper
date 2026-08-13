@@ -1,6 +1,6 @@
 # Build: automatic snooker scoring web app
 
-Build a production-minded, phone-first progressive web app that automatically keeps score for a live snooker match from a single smartphone camera on a tripod. It must run in a mobile browser, request camera access, work when the phone is mounted in portrait or landscape, and need no score-confirmation taps while a frame is in progress.
+Build a production-minded, phone-first progressive web app that automatically keeps score for a live snooker match from a single smartphone camera on a tripod. The physical camera view is an angled, room-level view from beside the table—not a camera mounted directly above it—and the phone is pointed toward the table and players. Any top-down view mentioned below is a perspective-rectified internal representation derived from that tripod footage, not the expected camera position. The app must run in a mobile browser, request camera access, work when the phone is mounted in portrait or landscape, and need no score-confirmation taps while a frame is in progress.
 
 ## Product goal
 
@@ -17,7 +17,7 @@ This is a vision-assisted referee and scorer. Design it so that the system is ho
    - Capture a face embedding locally only if consent is given.
    - Also learn a visual appearance profile from clothing, body shape, and colours, so face matching is not required during play.
    - Let the user enter or confirm each player's name.
-4. The user places the phone on a tripod. The setup screen guides them to frame the entire table, all six pockets, and a useful amount of space around the table where players stand.
+4. The user places the phone on a tripod beside or beyond the table and points its camera toward the table from an oblique angle. The setup screen guides them to frame the entire table, all six pockets, and a useful amount of space around the table where players stand; it must not assume an overhead or top-down physical camera position.
 5. Automatically detect the table boundary, pockets, rails, balls, camera orientation, and table perspective. Rectify the camera view into a normalized top-down table coordinate system.
 6. Start the frame. From then on, detect the player at the table, cue/shot events, ball paths, contacts, pots, fouls, and end-of-frame conditions. Update the score automatically.
 
@@ -108,7 +108,7 @@ Persist a match as an append-only event log plus derived state. Include a correc
 Build in phases, keeping the app runnable after each phase:
 
 1. Mobile PWA shell, camera preview, orientation handling, and setup UI.
-2. Table/pocket calibration and normalized top-down overlay.
+2. Table/pocket calibration from the angled tripod footage and a perspective-rectified, normalized top-down overlay.
 3. Ball detection/tracking with a simulated or recorded-video adapter for deterministic development.
 4. Complete rules engine with exhaustive unit tests for regular scoring, fouls, free balls, clearance, and re-spotted black.
 5. Shot event extraction and automatic score updates from detected events.
